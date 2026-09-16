@@ -74,6 +74,32 @@ const EN = {
   resetView: 'Reset view',
   readFull: 'Read full file',
   showLess: 'Show less',
+  updateTo: v => `Update to v${v}`,
+  checkingUpdate: 'Checking for updates…',
+  upToDate: v => `v${v} · up to date`,
+  updateDone: 'Updated — restart the gateway and reload the window to apply.',
+  selectedN: (n, size) => `${n} selected · ${size}`,
+  clear: 'Clear selection',
+  dragResize: 'Drag to resize',
+  recycleBin: 'Recycle Bin',
+  restore: 'Restore',
+  restoreFirst: 'Restore it from the Recycle Bin first.',
+  emptyBin: 'Empty Recycle Bin',
+  emptyBinTip: 'Permanently delete everything in the Recycle Bin',
+  confirmEmpty: 'Click again to empty',
+  origPath: 'Original location',
+  deletedOn: 'Deleted',
+  copyOutside: 'Copy outside Hermes',
+  nothingToPaste: 'Nothing to paste — copy something first.',
+  aheadV: v => `Unpushed v${v}`,
+  aheadTip: (l, r) => `Local v${l} is ahead of GitHub v${r} — push to publish it. Click to re-check.`,
+  viewList: 'List view',
+  viewGrid: 'Grid view',
+  cName: 'Name',
+  cSize: 'Size',
+  cModified: 'Modified',
+  cType: 'Type',
+  folder: 'Folder',
 }
 const LOCALES = { en: EN }
 
@@ -133,9 +159,24 @@ const CSS = `
 .hermes-fb-opsbar{display:flex;gap:4px;flex-wrap:wrap;align-items:center;padding:6px 8px;border-bottom:1px solid var(--ui-stroke-secondary)}
 .hermes-fb-pvwrap{display:flex;flex-direction:column;flex-shrink:0;min-height:0;border-top:1px solid var(--ui-stroke-secondary)}
 .hermes-fb-pvwrap .hermes-fb-preview{border-top:0;flex:1;min-height:0;max-height:none}
-.hermes-fb-griph{height:6px;cursor:row-resize;flex-shrink:0}
-.hermes-fb-griph:hover{background:var(--ui-accent)}
+.hermes-fb-griph{height:8px;cursor:row-resize;flex-shrink:0;touch-action:none;position:relative}
+.hermes-fb-griph::after{content:'';position:absolute;left:50%;top:3px;width:36px;height:2px;margin-left:-18px;border-radius:1px;background:var(--ui-stroke-secondary)}
+.hermes-fb-griph:hover{background:var(--chrome-action-hover)}
+.hermes-fb-griph:hover::after{background:var(--ui-accent)}
 .hermes-fb-tile[data-drop=true]{border-color:var(--ui-accent);background:var(--chrome-action-hover)}
+.hermes-fb-list{flex:1;min-height:0;overflow-y:auto;padding:2px 4px;display:flex;flex-direction:column}
+.hermes-fb-lhead,.hermes-fb-lrow{display:grid;grid-template-columns:minmax(0,1fr) 84px 128px 72px;gap:8px;align-items:center;padding:3px 8px;font-size:12px}
+.hermes-fb-lhead{color:var(--ui-text-tertiary);font-size:10px;text-transform:uppercase;letter-spacing:.05em}
+.hermes-fb-lhbtn{background:none;border:0;padding:0;font:inherit;color:inherit;text-transform:inherit;letter-spacing:inherit;cursor:pointer;text-align:left}
+.hermes-fb-lhbtn:hover{color:var(--ui-text-primary)}
+.hermes-fb-lhbtn[data-on=true]{color:var(--ui-accent)}
+.hermes-fb-lrow{border-radius:4px;cursor:pointer;color:var(--ui-text-primary)}
+.hermes-fb-lrow:hover{background:var(--chrome-action-hover)}
+.hermes-fb-lrow[data-on=true]{background:var(--chrome-action-hover)}
+.hermes-fb-lrow[data-drop=true]{outline:1px solid var(--ui-accent)}
+.hermes-fb-lname{display:flex;gap:8px;align-items:center;min-width:0}
+.hermes-fb-lname span:last-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.hermes-fb-lnum{text-align:right;color:var(--ui-text-secondary)}
 `
 
 const CODE_EXTS = new Set(['.py', '.js', '.ts', '.tsx', '.jsx', '.mjs', '.cjs', '.json', '.yaml', '.yml', '.toml', '.md', '.txt', '.log', '.ini', '.cfg', '.css', '.html', '.xml', '.csv', '.ps1', '.bat', '.sh', '.java', '.c', '.cpp', '.h', '.rs', '.go', '.kt', '.sql', '.vue'])
@@ -362,7 +403,35 @@ function ModelView({ ctx, t, entry }) {
   ] })
 }
 
+function TrashPreview({ ctx, t, entry, refetch, select }) {
+  const [busy, setBusy] = useState(false)
+  const doRestore = async () => {
+    setBusy(true)
+    try {
+      const r = await ctx.rest('/trash-restore', { method: 'POST', timeoutMs: 60000, body: { id: entry.path } })
+      if (!r?.ok) hostNotify(ctx, 'restore failed')
+      select(null)
+      refetch()
+    } catch (e) { hostNotify(ctx, String((e && e.message) || e)) }
+    setBusy(false)
+  }
+  return jsxs('div', { className: 'hermes-fb-preview', children: [
+    jsxs('div', { className: 'hermes-fb-opsbar', children: [
+      jsx('span', { style: { fontSize: 12, fontWeight: 600 }, children: entry.name }),
+      jsx('span', { style: { flex: 1 } }),
+      jsx('button', { className: 'hermes-fb-tbtn', style: { width: 20, height: 20, fontSize: 12 }, title: t('closePreview'), onClick: () => select(null), children: '×' }),
+    ] }),
+    jsxs('div', { className: 'hermes-fb-kv', children: [jsx('span', { children: t('origPath') }), jsx('b', { children: entry.orig || '—' })] }),
+    jsxs('div', { className: 'hermes-fb-kv', children: [jsx('span', { children: t('deletedOn') }), jsx('b', { children: entry.deleted ? fmtDate(entry.deleted) : '—' })] }),
+    jsxs('div', { className: 'hermes-fb-kv', children: [jsx('span', { children: 'Size' }), jsx('b', { children: entry.is_dir ? '—' : fmtSize(entry.size) })] }),
+    jsxs('div', { className: 'hermes-fb-actions', children: [
+      jsx(Button, { size: 'micro', onClick: doRestore, disabled: busy, children: t('restore') }),
+    ] }),
+  ] })
+}
+
 function Preview({ ctx, t, entry, refetch, select }) {
+  if (entry.path.startsWith('trash://')) return jsx(TrashPreview, { ctx, t, entry, refetch, select })
   const isImg = IMG_EXTS.has(entry.ext)
   const isAudio = AUD_EXTS.has(entry.ext)
   const isVideo = VID_EXTS.has(entry.ext)
@@ -381,13 +450,17 @@ function Preview({ ctx, t, entry, refetch, select }) {
   if (pendingDelete.get() === entry.path) { pendingDelete.set(null); if (!confirmDel) setConfirmDel(true) }
   const doPasteHere = async () => {
     const c = clipboard.get()
-    if (!c) return
     const dest = entry.path.replace(/[/\\][^/\\]+$/, '') || entry.path
     setOpBusy(true)
     try {
-      const r = await ctx.rest(c.mode === 'cut' ? '/move' : '/copy', { method: 'POST', timeoutMs: 60000, body: { paths: c.paths, dest_dir: dest } })
-      if (!r?.ok) opErr((r?.failed?.[0]?.error) || 'paste failed')
-      else if (c.mode === 'cut') clipboard.set(null)
+      if (c && c.paths?.length) {
+        const r = await ctx.rest(c.mode === 'cut' ? '/move' : '/copy', { method: 'POST', timeoutMs: 60000, body: { paths: c.paths, dest_dir: dest } })
+        if (!r?.ok) opErr((r?.failed?.[0]?.error) || 'paste failed')
+        else if (c.mode === 'cut') clipboard.set(null)
+      } else {
+        const r = await ctx.rest('/paste-os', { method: 'POST', timeoutMs: 120000, body: { dest } })
+        if (!r?.ok) opErr(t('nothingToPaste'))
+      }
       refetch()
     } catch (e) { opErr(e) }
     setOpBusy(false)
@@ -473,7 +546,7 @@ function Preview({ ctx, t, entry, refetch, select }) {
       !renameMode && jsx(Button, { size: 'micro', variant: 'ghost', onClick: () => { setRenameName(entry.name); setConfirmDel(false); setRenameMode(true) }, children: t('rename') }),
       jsx(Button, { size: 'micro', variant: 'ghost', onClick: () => clipboard.set({ mode: 'copy', paths: [entry.path], label: entry.name }), children: t('copy') }),
       jsx(Button, { size: 'micro', variant: 'ghost', onClick: () => clipboard.set({ mode: 'cut', paths: [entry.path], label: entry.name }), children: t('cut') }),
-      jsx(Button, { size: 'micro', variant: 'ghost', onClick: doPasteHere, disabled: !clip || opBusy, children: t('paste') }),
+      jsx(Button, { size: 'micro', variant: 'ghost', onClick: doPasteHere, disabled: opBusy, children: t('paste') }),
       jsx(Button, { size: 'micro', variant: 'ghost', onClick: doDelete, disabled: opBusy, children: confirmDel ? t('confirmDelete') : t('delete') }),
       jsx(Button, { size: 'micro', variant: 'ghost', onClick: doZip, disabled: opBusy, children: t('compress') }),
       entry.ext === '.zip' && jsx(Button, { size: 'micro', variant: 'ghost', onClick: doExtract, disabled: opBusy, children: t('extract') }),
@@ -515,12 +588,61 @@ function hostNotify(ctx, message) {
   } catch { /* noop */ }
 }
 
-function TabPane({ ctx, tabId, initialCwd, sort, setSort, tilePx, setTilePx, showHidden, setShowHidden, sideWidth, setSideWidth, sideCollapsed, setSideCollapsed, previewH, setPreviewH, hidden }) {
+function MultiPanel({ ctx, t, entries, cwd, clearSel, refresh }) {
+  const [confirmDel, setConfirmDel] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const paths = entries.map(x => x.path)
+  const totalSize = entries.reduce((a, x) => a + (x.is_dir ? 0 : (x.size || 0)), 0)
+  const run = async fn => {
+    setBusy(true)
+    try { await fn(); clearSel(); refresh() } catch (e) { hostNotify(ctx, String((e && e.message) || e)) }
+    setBusy(false)
+    setConfirmDel(false)
+  }
+  const doCopy = () => { clipboard.set({ mode: 'copy', paths, label: `${entries.length} items` }) }
+  const doCut = () => { clipboard.set({ mode: 'cut', paths, label: `${entries.length} items` }) }
+  const doZip = () => run(async () => {
+    const r = await ctx.rest('/zip', { method: 'POST', timeoutMs: 180000, body: { paths } })
+    if (!r?.ok) throw new Error((r?.failed?.[0]?.error) || 'compress failed')
+  })
+  const doDelete = () => {
+    if (!confirmDel) { setConfirmDel(true); return }
+    run(async () => {
+      const r = await ctx.rest('/delete', { method: 'POST', timeoutMs: 120000, body: { paths } })
+      if (!r?.ok) throw new Error((r?.failed?.[0]?.error) || 'delete failed')
+    })
+  }
+  return jsxs('div', { className: 'hermes-fb-preview', children: [
+    jsxs('div', { className: 'hermes-fb-opsbar', children: [
+      jsx('span', { style: { fontSize: 12, fontWeight: 600 }, children: t('selectedN', entries.length, fmtSize(totalSize)) }),
+      jsx('span', { style: { flex: 1 } }),
+      jsx('button', { className: 'hermes-fb-tbtn', style: { width: 20, height: 20, fontSize: 12 }, title: t('clear'), onClick: clearSel, children: '×' }),
+    ] }),
+    jsxs('div', { className: 'hermes-fb-actions', children: [
+      jsx(Button, { size: 'micro', variant: 'ghost', onClick: doCopy, disabled: busy, children: t('copy') }),
+      jsx(Button, { size: 'micro', variant: 'ghost', onClick: doCut, disabled: busy, children: t('cut') }),
+      jsx(Button, { size: 'micro', variant: 'ghost', onClick: doDelete, disabled: busy, children: confirmDel ? t('confirmDelete') : t('delete') }),
+      jsx(Button, { size: 'micro', variant: 'ghost', onClick: doZip, disabled: busy, children: t('compress') }),
+    ] }),
+  ] })
+}
+
+const MIME_BY_EXT = { mp3: 'audio/mpeg', wav: 'audio/wav', flac: 'audio/flac', m4a: 'audio/mp4', ogg: 'audio/ogg', opus: 'audio/opus', mp4: 'video/mp4', mkv: 'video/x-matroska', avi: 'video/x-msvideo', mov: 'video/quicktime', webm: 'video/webm', png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', bmp: 'image/bmp', webp: 'image/webp', pdf: 'application/pdf', zip: 'application/zip', txt: 'text/plain' }
+function dlUrl(path, name) {
+  const ext = String(name).split('.').pop().toLowerCase()
+  const mime = MIME_BY_EXT[ext] || 'application/octet-stream'
+  const base = (typeof window !== 'undefined' && window.location && window.location.origin) || ''
+  return `${mime}:${name}:${base}/api/plugins/filebox/dl?path=${encodeURIComponent(path)}`
+}
+
+function TabPane({ ctx, tabId, initialCwd, sort, setSort, tilePx, setTilePx, showHidden, setShowHidden, sideWidth, setSideWidth, sideCollapsed, setSideCollapsed, sideOrder, setSideOrder, previewH, setPreviewH, viewMode, setViewMode, hidden }) {
   const t = usePluginI18n(ID)
   const [cwd, setCwd] = useState(initialCwd || null)
   const [back, setBack] = useState([])
   const [fwd, setFwd] = useState([])
-  const [selected, setSelected] = useState(null)
+  const [sel, setSel] = useState([])
+  const anchorRef = useRef(null)
+  const clearSel = () => { setSel([]); anchorRef.current = null }
   const [search, setSearch] = useState('')
   const [pins, setPins] = useState(() => ctx.storage.get('pins', null))
   const [mkdirMode, setMkdirMode] = useState(false)
@@ -540,11 +662,30 @@ function TabPane({ ctx, tabId, initialCwd, sort, setSort, tilePx, setTilePx, sho
 
   const list = useQuery({
     queryKey: [ID, 'list', cwd, showHidden, bump],
-    queryFn: ({ signal }) => ctx.rest('/list', { method: 'POST', timeoutMs: 20000, signal, body: { path: cwd, show_hidden: showHidden } }),
+    queryFn: async ({ signal }) => {
+      if (cwd === 'trash://') {
+        const r = await ctx.rest('/trash', { method: 'POST', timeoutMs: 20000, signal, body: {} })
+        const items = Array.isArray(r?.items) ? r.items : []
+        return { entries: items, total: items.length, parent: null }
+      }
+      return ctx.rest('/list', { method: 'POST', timeoutMs: 20000, signal, body: { path: cwd, show_hidden: showHidden } })
+    },
     enabled: !!cwd,
     staleTime: 10000,
     retry: false,
   })
+  const isTrash = cwd === 'trash://'
+  const [emptyConfirm, setEmptyConfirm] = useState(false)
+  const doEmptyTrash = async () => {
+    if (!emptyConfirm) { setEmptyConfirm(true); return }
+    setEmptyConfirm(false)
+    try {
+      const r = await ctx.rest('/trash-empty', { method: 'POST', timeoutMs: 120000, body: {} })
+      if (!r?.ok) hostNotify(ctx, 'empty failed')
+      clearSel()
+      list.refetch()
+    } catch (e) { hostNotify(ctx, String((e && e.message) || e)) }
+  }
 
   const nav = (path, push = true) => {
     if (!path || path === cwd) return
@@ -553,7 +694,7 @@ function TabPane({ ctx, tabId, initialCwd, sort, setSort, tilePx, setTilePx, sho
       setFwd([])
     }
     setCwd(path)
-    setSelected(null)
+    clearSel()
     setSearch('')
   }
 
@@ -563,7 +704,7 @@ function TabPane({ ctx, tabId, initialCwd, sort, setSort, tilePx, setTilePx, sho
     setBack(b => b.slice(0, -1))
     if (cwd) setFwd(f => [cwd, ...f].slice(0, 50))
     setCwd(prev)
-    setSelected(null)
+    clearSel()
     setSearch('')
   }
 
@@ -573,7 +714,7 @@ function TabPane({ ctx, tabId, initialCwd, sort, setSort, tilePx, setTilePx, sho
     setFwd(rest)
     if (cwd) setBack(b => [...b.slice(-49), cwd])
     setCwd(next)
-    setSelected(null)
+    clearSel()
     setSearch('')
   }
 
@@ -592,9 +733,50 @@ function TabPane({ ctx, tabId, initialCwd, sort, setSort, tilePx, setTilePx, sho
 
   const total = list.data?.total ?? entries.length
   const shown = entries.slice(0, RENDER_CAP)
-  const crumbs = cwd ? splitPath(cwd) : []
-  const selEntry = selected ? entries.find(e => e.path === selected) : null
+  const crumbs = isTrash ? ['Recycle Bin'] : (cwd ? splitPath(cwd) : [])
+  const selEntry = sel.length === 1 ? entries.find(e => e.path === sel[0]) : null
+  const selEntries = sel.map(p => entries.find(e => e.path === p)).filter(Boolean)
+  const selectProp = v => { if (v) { setSel([v]) } else { clearSel() } }
+  // Click gestures: plain = single, Ctrl/Cmd = toggle, Shift = range from anchor
+  const clickSel = (entry, idx, ev) => {
+    if (ev && ev.shiftKey && anchorRef.current != null && shown[anchorRef.current]) {
+      const a = anchorRef.current
+      const [lo, hi] = a < idx ? [a, idx] : [idx, a]
+      setSel(shown.slice(lo, hi + 1).map(x => x.path))
+      return
+    }
+    if (ev && (ev.ctrlKey || ev.metaKey)) {
+      anchorRef.current = idx
+      setSel(s => s.includes(entry.path) ? s.filter(p => p !== entry.path) : [...s, entry.path])
+      return
+    }
+    anchorRef.current = idx
+    setSel(s => (s.length === 1 && s[0] === entry.path) ? [] : [entry.path])
+  }
   const pinned = cwd && pinsEffective.includes(cwd)
+  // Sidebar: pins + recycle bin + drives in one draggable list. Order
+  // persists (sideOrder); unknown ids (new pins/drives) append at the end.
+  const sideItems = (() => {
+    const items = [
+      ...pinsEffective.map(p => ({ id: `pin:${p}`, kind: 'pin', path: p })),
+      { id: 'trash:bin', kind: 'trash', path: 'trash://' },
+      ...(roots.data?.drives ?? []).map(d => ({ id: `drive:${d.mount}`, kind: 'drive', path: d.mount, drive: d })),
+    ]
+    if (!Array.isArray(sideOrder)) return items
+    const pos = new Map(sideOrder.map((id, i) => [id, i]))
+    const rank = it => (pos.has(it.id) ? pos.get(it.id) : 1e9)
+    return [...items].sort((a, b) => rank(a) - rank(b))
+  })()
+  const moveSideItem = (fromId, toId) => {
+    if (!fromId || !toId || fromId === toId) return
+    const ids = sideItems.map(x => x.id).filter(id => id !== fromId)
+    const at = ids.indexOf(toId)
+    ids.splice(at < 0 ? ids.length : at, 0, fromId)
+    setSideOrder(ids)
+  }
+  const sideDragStart = id => ev => { try { ev.dataTransfer.setData('application/x-filebox-side', id) } catch {} try { ev.dataTransfer.effectAllowed = 'move' } catch {} }
+  const sideDragOver = ev => { try { if (Array.from(ev.dataTransfer?.types || []).includes('application/x-filebox-side')) ev.preventDefault() } catch {} }
+  const sideDrop = id => ev => { ev.preventDefault(); try { moveSideItem(ev.dataTransfer.getData('application/x-filebox-side'), id) } catch {} }
 
   const togglePin = () => {
     if (!cwd) return
@@ -625,13 +807,23 @@ function TabPane({ ctx, tabId, initialCwd, sort, setSort, tilePx, setTilePx, sho
   }
 
   const pasteTo = async dest => {
+    if (typeof dest === 'string' && dest.startsWith('trash://')) { hostNotify(ctx, t('restoreFirst')); return }
     const c = clipboard.get()
-    if (!c || !dest) return
+    if (c && c.paths?.length) {
+      try {
+        const r = await ctx.rest(c.mode === 'cut' ? '/move' : '/copy', { method: 'POST', timeoutMs: 60000, body: { paths: c.paths, dest_dir: dest } })
+        if (!r?.ok) hostNotify(ctx, ((r?.failed?.[0]?.error) || 'paste failed'))
+        else if (c.mode === 'cut') clipboard.set(null)
+        list.refetch()
+      } catch (e) { hostNotify(ctx, String((e && e.message) || e)) }
+      return
+    }
+    // No FileBox clipboard — fall back to files copied in Explorer / desktop
+    if (!dest) return
     try {
-      const r = await ctx.rest(c.mode === 'cut' ? '/move' : '/copy', { method: 'POST', timeoutMs: 60000, body: { paths: c.paths, dest_dir: dest } })
-      if (!r?.ok) hostNotify(ctx, ((r?.failed?.[0]?.error) || 'paste failed'))
-      else if (c.mode === 'cut') clipboard.set(null)
-      list.refetch()
+      const r = await ctx.rest('/paste-os', { method: 'POST', timeoutMs: 120000, body: { dest } })
+      if (r?.ok) list.refetch()
+      else hostNotify(ctx, t('nothingToPaste'))
     } catch (e) { hostNotify(ctx, String((e && e.message) || e)) }
   }
 
@@ -645,17 +837,47 @@ function TabPane({ ctx, tabId, initialCwd, sort, setSort, tilePx, setTilePx, sho
     } catch (e) { hostNotify(ctx, String((e && e.message) || e)) }
   }
 
+  const isVirt = p => typeof p === 'string' && p.startsWith('trash://')
   const quickOp = async (kind, target) => {
     try {
+      if (kind === 'restore') {
+        const paths = (sel.includes(target.path) && sel.length > 1 ? sel : [target.path]).filter(isVirt)
+        if (!paths.length) return
+        const r = await (async () => {
+          const failed = []
+          for (const p of paths) {
+            try {
+              const rr = await ctx.rest('/trash-restore', { method: 'POST', timeoutMs: 60000, body: { id: p } })
+              if (!rr?.ok) failed.push(p)
+            } catch { failed.push(p) }
+          }
+          return { ok: failed.length === 0, failed }
+        })()
+        if (!r.ok) hostNotify(ctx, 'restore failed')
+        clearSel()
+        list.refetch()
+        return
+      }
+      if (isVirt(target.path)) { hostNotify(ctx, t('restoreFirst')); return }
+      // Non-destructive ops act on the whole selection when the target is in it
+      const multi = sel.includes(target.path) && sel.length > 1
+      const paths = multi ? selEntries.map(x => x.path) : [target.path]
+      const label = multi ? `${selEntries.length} items` : target.name
       if (kind === 'open') { openEntry(target); return }
-      if (kind === 'rename') { pendingRename.set(target.path); setSelected(target.path); return }
-      if (kind === 'delete') { pendingDelete.set(target.path); setSelected(target.path); return }
-      if (kind === 'copy') { clipboard.set({ mode: 'copy', paths: [target.path], label: target.name }); return }
-      if (kind === 'cut') { clipboard.set({ mode: 'cut', paths: [target.path], label: target.name }); return }
+      if (kind === 'rename') { pendingRename.set(target.path); setSel([target.path]); return }
+      if (kind === 'delete') { pendingDelete.set(target.path); setSel([target.path]); return }
+      if (kind === 'copy') { clipboard.set({ mode: 'copy', paths, label }); return }
+      if (kind === 'cut') { clipboard.set({ mode: 'cut', paths, label }); return }
+      if (kind === 'copyout') {
+        const ps = (multi ? paths : [target.path]).filter(p => !isVirt(p) && typeof p === 'string')
+        if (!ps.length) return
+        await ctx.rest('/copy-out', { method: 'POST', timeoutMs: 30000, body: { paths: ps } })
+        return
+      }
       if (kind === 'paste') { await pasteTo(target.is_dir ? target.path : cwd); return }
-      if (kind === 'copypath') { await ctx.os.writeClipboard(target.path); return }
+      if (kind === 'copypath') { await ctx.os.writeClipboard(multi ? paths.join('\n') : target.path); return }
       if (kind === 'reveal') { await ctx.os.revealPath(target.is_dir ? target.path : target.path.replace(/[/\\][^/\\]+$/, '')); return }
-      if (kind === 'compress') await ctx.rest('/zip', { method: 'POST', timeoutMs: 60000, body: { paths: [target.path] } })
+      if (kind === 'compress') await ctx.rest('/zip', { method: 'POST', timeoutMs: 120000, body: { paths } })
       else if (kind === 'extract') await ctx.rest('/extract', { method: 'POST', timeoutMs: 60000, body: { path: target.path } })
       list.refetch()
     } catch (e) { hostNotify(ctx, String((e && e.message) || e)) }
@@ -663,12 +885,19 @@ function TabPane({ ctx, tabId, initialCwd, sort, setSort, tilePx, setTilePx, sho
 
   const startPreviewDrag = e => {
     e.preventDefault()
+    const grip = e.currentTarget
     const y0 = e.clientY
     const h0 = previewH
+    try { grip.setPointerCapture(e.pointerId) } catch {}
     const move = ev => setPreviewH(Math.min(640, Math.max(140, Math.round(h0 + (y0 - ev.clientY)))))
-    const up = () => { window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up) }
-    window.addEventListener('mousemove', move)
-    window.addEventListener('mouseup', up)
+    const up = () => {
+      grip.removeEventListener('pointermove', move)
+      grip.removeEventListener('pointerup', up)
+      grip.removeEventListener('pointercancel', up)
+    }
+    grip.addEventListener('pointermove', move)
+    grip.addEventListener('pointerup', up)
+    grip.addEventListener('pointercancel', up)
   }
 
   const openEntry = async e => {
@@ -678,9 +907,56 @@ function TabPane({ ctx, tabId, initialCwd, sort, setSort, tilePx, setTilePx, sho
       const ok = await ctx.os.openExternal(url)
       if (!ok) throw new Error('no handler')
     } catch {
-      try { await ctx.os.revealPath(e.path.replace(/[/\\][^/\\]+$/, '')) } catch { /* noop */ }
+      try { await ctx.os.revealPath(e.path.replace(/[/\\][^/\\]+$/, '') || e.path) } catch { /* noop */ }
     }
   }
+
+  // Shared row gestures for grid tiles AND list rows
+  const rowEvents = (e, idx) => ({
+    onClick: ev => clickSel(e, idx, ev),
+    onContextMenu: () => { if (!sel.includes(e.path)) { anchorRef.current = idx; setSel([e.path]) } },
+    onDragStart: isTrash ? undefined : (ev => {
+      const paths = (sel.includes(e.path) && sel.length) ? sel : [e.path]
+      try { ev.dataTransfer.setData('application/x-filebox-paths', JSON.stringify(paths)) } catch {}
+      try {
+        if (paths.length === 1) {
+          const one = entries.find(x => x.path === paths[0])
+          if (one && !one.is_dir) ev.dataTransfer.setData('DownloadURL', dlUrl(one.path, one.name))
+        }
+      } catch {}
+      ev.dataTransfer.effectAllowed = 'copyMove'
+      if (!sel.includes(e.path)) { anchorRef.current = idx; setSel([e.path]) }
+    }),
+    onDragOver: (e.is_dir && !isTrash) ? (ev => { if (hasFbPaths(ev)) { ev.preventDefault(); ev.dataTransfer.dropEffect = 'move'; setDropPath(e.path) } }) : undefined,
+    onDragLeave: (e.is_dir && !isTrash) ? (ev => { if (!ev.currentTarget.contains(ev.relatedTarget)) setDropPath(cur => cur === e.path ? null : cur) }) : undefined,
+    onDrop: (e.is_dir && !isTrash) ? (ev => { ev.preventDefault(); setDropPath(null); try { dropMove(JSON.parse(ev.dataTransfer.getData('application/x-filebox-paths') || '[]'), e.path) } catch {} }) : undefined,
+    onDoubleClick: isTrash ? undefined : (() => openEntry(e)),
+    onKeyDown: ev => { if (ev.key === 'Enter' && !isTrash) openEntry(e) },
+  })
+  const gridKeys = ev => {
+    const tag = ev.target?.tagName
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
+    if (ev.key === 'Escape') { clearSel(); return }
+    if ((ev.ctrlKey || ev.metaKey) && (ev.key === 'a' || ev.key === 'A')) { ev.preventDefault(); anchorRef.current = null; setSel(shown.map(x => x.path)) }
+  }
+  const menuItems = e => (isVirt(e.path) ? [
+    jsx(ContextMenuItem, { onSelect: () => quickOp('restore', e), children: t('restore') }),
+  ] : [
+    jsx(ContextMenuItem, { onSelect: () => quickOp('open', e), children: t('openFile') }),
+    jsx(ContextMenuItem, { onSelect: () => quickOp('rename', e), children: t('rename') }),
+    jsx(ContextMenuSeparator, {}),
+    jsx(ContextMenuItem, { onSelect: () => quickOp('copy', e), children: t('copy') }),
+    jsx(ContextMenuItem, { onSelect: () => quickOp('cut', e), children: t('cut') }),
+    jsx(ContextMenuItem, { onSelect: () => quickOp('copyout', e), children: t('copyOutside') }),
+    jsx(ContextMenuItem, { onSelect: () => quickOp('paste', e), children: t('paste') }),
+    jsx(ContextMenuSeparator, {}),
+    jsx(ContextMenuItem, { onSelect: () => quickOp('compress', e), children: t('compress') }),
+    e.ext === '.zip' && jsx(ContextMenuItem, { onSelect: () => quickOp('extract', e), children: t('extract') }),
+    jsx(ContextMenuItem, { onSelect: () => quickOp('delete', e), variant: 'destructive', children: t('delete') }),
+    jsx(ContextMenuSeparator, {}),
+    jsx(ContextMenuItem, { onSelect: () => quickOp('copypath', e), children: t('copyPath') }),
+    jsx(ContextMenuItem, { onSelect: () => quickOp('reveal', e), children: t('reveal') }),
+  ])
 
   if (!cwd && home) setCwd(home)
 
@@ -693,20 +969,24 @@ function TabPane({ ctx, tabId, initialCwd, sort, setSort, tilePx, setTilePx, sho
         jsx('div', { className: 'hermes-fb-group', style: { flex: 1 }, children: t('quickAccess') }),
         jsx('button', { className: 'hermes-fb-tbtn', style: { width: 20, height: 20, fontSize: 11 }, title: 'Hide sidebar', onClick: () => setSideCollapsed(true), children: '«' }),
       ] }),
-      ...pinsEffective.map(p => jsx('button', {
-        className: 'hermes-fb-navbtn', 'data-on': p === cwd,
-        onClick: () => nav(p),
-        children: [jsx(Codicon, { name: 'folder' }), jsx('span', { children: p.split(/[/\\]+/).filter(Boolean).pop() || p })],
-      }, `pin:${p}`)),
-      jsx('div', { className: 'hermes-fb-group', children: t('thisPC') }),
-      ...(roots.data?.drives ?? []).map(d => jsxs('div', { children: [
-        jsx('button', {
-          className: 'hermes-fb-navbtn', 'data-on': d.mount === cwd,
-          onClick: () => nav(d.mount),
-          children: [jsx(Codicon, { name: 'device-hard-drive' }), jsx('span', { children: `${d.device} · ${d.total_gb} GB` })],
-        }),
-        jsx('div', { className: 'hermes-fb-drivebar', children: jsx('div', { style: { width: `${d.percent}%` } }) }),
-      ] }, `drive:${d.mount}`)),
+      ...sideItems.map(it => {
+        const label = it.kind === 'pin'
+          ? (it.path.split(/[/\\]+/).filter(Boolean).pop() || it.path)
+          : it.kind === 'trash' ? t('recycleBin') : `${it.drive.device} · ${it.drive.total_gb} GB`
+        const icon = it.kind === 'pin' ? 'folder' : it.kind === 'trash' ? 'trash' : 'device-hard-drive'
+        const btn = jsx('button', {
+          className: 'hermes-fb-navbtn', 'data-on': it.path === cwd,
+          draggable: true, onDragStart: sideDragStart(it.id), onDragOver: sideDragOver, onDrop: sideDrop(it.id),
+          onClick: () => nav(it.path),
+          children: [jsx(Codicon, { name: icon }), jsx('span', { children: label })],
+        }, it.id)
+        return it.kind === 'drive'
+          ? jsxs('div', { onDragOver: sideDragOver, onDrop: sideDrop(it.id), children: [
+              btn,
+              jsx('div', { className: 'hermes-fb-drivebar', children: jsx('div', { style: { width: `${it.drive.percent}%` } }) }),
+            ] }, it.id)
+          : btn
+      }),
     ] }),
     !sideCollapsed && jsx('div', { className: 'hermes-fb-grip', onMouseDown: startDrag }),
     jsxs('div', { className: 'hermes-fb-main', children: [
@@ -721,11 +1001,14 @@ function TabPane({ ctx, tabId, initialCwd, sort, setSort, tilePx, setTilePx, sho
             const full = i === 0 ? c : `${crumbs[0]}${crumbs.slice(1, i + 1).join('\\')}`
             return jsxs('span', { style: { display: 'inline-flex', alignItems: 'center', flexShrink: 0 }, children: [
               i > 0 && jsx('span', { style: { color: 'var(--ui-text-quaternary)' }, children: '›' }),
-              jsx('button', { className: 'hermes-fb-crumb', 'data-on': i === crumbs.length - 1, onClick: () => nav(full), children: c.replace(/\\$/, '') }),
+              (isTrash || i === crumbs.length - 1)
+                ? jsx('span', { className: 'hermes-fb-crumb', 'data-on': true, children: c.replace(/\\$/, '') })
+                : jsx('button', { className: 'hermes-fb-crumb', 'data-on': false, onClick: () => nav(full), children: c.replace(/\\$/, '') }),
             ] }, i)
           }),
         }),
-        jsx('button', { className: 'hermes-fb-tbtn', title: pinned ? t('unpinFolder') : t('pinFolder'), onClick: () => togglePin(cwd), children: pinned ? '★' : '☆' }),
+        !isTrash && jsx('button', { className: 'hermes-fb-tbtn', title: pinned ? t('unpinFolder') : t('pinFolder'), onClick: () => togglePin(cwd), children: pinned ? '★' : '☆' }),
+        isTrash && jsx(Button, { size: 'micro', variant: 'ghost', title: t('emptyBinTip'), onClick: doEmptyTrash, children: emptyConfirm ? t('confirmEmpty') : t('emptyBin') }),
       ] }),
       jsxs('div', { className: 'hermes-fb-searchrow', children: [
         jsx('div', { className: 'hermes-fb-search', children: jsx(SearchField, {
@@ -738,41 +1021,61 @@ function TabPane({ ctx, tabId, initialCwd, sort, setSort, tilePx, setTilePx, sho
           jsx('option', { value: 'mtime', children: t('sortDate') }),
           jsx('option', { value: 'type', children: t('sortType') }),
         ] }),
-        jsx('select', { className: 'hermes-fb-sort', value: tilePx, 'aria-label': 'tile size', onChange: e => setTilePx(Number(e.target.value)), children: [
+        viewMode === 'grid' && jsx('select', { className: 'hermes-fb-sort', value: tilePx, 'aria-label': 'tile size', onChange: e => setTilePx(Number(e.target.value)), children: [
           jsx('option', { value: 64, children: 'S' }),
           jsx('option', { value: 88, children: 'M' }),
           jsx('option', { value: 112, children: 'L' }),
           jsx('option', { value: 144, children: 'XL' }),
         ] }),
+        jsx('button', { className: 'hermes-fb-tbtn', style: { width: 26, height: 22, fontSize: 13 }, title: viewMode === 'grid' ? t('viewList') : t('viewGrid'), onClick: () => setViewMode(viewMode === 'grid' ? 'list' : 'grid'), children: viewMode === 'grid' ? '☰' : '▦' }),
       ] }),
-      mkdirMode && jsxs('div', { className: 'hermes-fb-mkdir', children: [
+      mkdirMode && !isTrash && jsxs('div', { className: 'hermes-fb-mkdir', children: [
         jsx('input', { value: mkdirName, placeholder: t('newFolder'), onChange: e => setMkdirName(e.target.value), onKeyDown: e => { if (e.key === 'Enter') doMkdir() } }),
         jsx(Button, { size: 'micro', onClick: doMkdir, children: t('create') }),
         jsx(Button, { size: 'micro', variant: 'ghost', onClick: () => { setMkdirMode(false); setMkdirName('') }, children: t('cancel') }),
       ] }),
-      jsxs('div', { className: 'hermes-fb-grid', style: { gridTemplateColumns: `repeat(auto-fill,minmax(${tilePx + 16}px,1fr))` }, onDragOver: ev => { if (hasFbPaths(ev)) ev.preventDefault() }, onDrop: ev => {
+      viewMode === 'list' ? jsxs('div', { className: 'hermes-fb-list', onKeyDown: gridKeys, children: [
+        jsxs('div', { className: 'hermes-fb-lhead', children: [
+          jsx('button', { className: 'hermes-fb-lhbtn', 'data-on': sort === 'name', onClick: () => setSort('name'), children: t('cName') }),
+          jsx('button', { className: 'hermes-fb-lhbtn', 'data-on': sort === 'size', onClick: () => setSort('size'), children: t('cSize') }),
+          jsx('button', { className: 'hermes-fb-lhbtn', 'data-on': sort === 'mtime', onClick: () => setSort('mtime'), children: t('cModified') }),
+          jsx('button', { className: 'hermes-fb-lhbtn', 'data-on': sort === 'type', onClick: () => setSort('type'), children: t('cType') }),
+        ] }),
+        list.isFetching && !list.data && jsx(GlyphSpinner, { ariaLabel: t('explorer') }),
+        list.isError && jsx('div', { className: 'hermes-fb-error', role: 'status', children: t('backendDown') }),
+        ...shown.map((e, idx) => jsx(ContextMenu, { children: [
+          jsx(ContextMenuTrigger, { asChild: true, children: jsxs('div', {
+            className: 'hermes-fb-lrow', 'data-on': sel.includes(e.path), 'data-dir': e.is_dir,
+            'data-drop': dropPath === e.path, role: 'button', tabIndex: 0,
+            draggable: !isTrash,
+            ...rowEvents(e, idx),
+            'aria-label': e.name,
+            children: [
+              jsxs('span', { className: 'hermes-fb-lname', children: [jsx(Codicon, { name: e.is_dir ? 'folder' : iconFor(category(e)), size: 14 }), jsx('span', { children: e.name })] }),
+              jsx('span', { className: 'hermes-fb-lnum', children: e.is_dir ? '—' : fmtSize(e.size) }),
+              jsx('span', { children: fmtDate(e.mtime) }),
+              jsx('span', { children: e.is_dir ? t('folder') : (e.ext ? e.ext.replace(/^\./, '').toUpperCase() : '—') }),
+            ],
+          }) }),
+          jsx(ContextMenuContent, { children: menuItems(e) }),
+        ] }, e.path)),
+      ] }) : jsxs('div', { className: 'hermes-fb-grid', style: { gridTemplateColumns: `repeat(auto-fill,minmax(${tilePx + 16}px,1fr))` }, onDragOver: ev => { if (hasFbPaths(ev)) ev.preventDefault() }, onKeyDown: gridKeys, onDrop: ev => {
+        if (isTrash) return
         if (ev.target?.closest && ev.target.closest('[data-dir="true"]')) return
         ev.preventDefault()
         try { dropMove(JSON.parse(ev.dataTransfer.getData('application/x-filebox-paths') || '[]'), cwd) } catch {}
       }, children: [
         list.isFetching && !list.data && jsx(GlyphSpinner, { ariaLabel: t('explorer') }),
         list.isError && jsx('div', { className: 'hermes-fb-error', role: 'status', children: t('backendDown') }),
-        ...shown.map(e => {
+        ...shown.map((e, idx) => {
           const cat = category(e)
           const iconPx = Math.max(24, Math.round(tilePx * 0.42))
           return jsx(ContextMenu, { children: [
           jsx(ContextMenuTrigger, { asChild: true, children: jsx('button', {
-            className: 'hermes-fb-tile', 'data-on': selected === e.path, 'data-dir': e.is_dir,
+            className: 'hermes-fb-tile', 'data-on': sel.includes(e.path), 'data-dir': e.is_dir,
             'data-drop': dropPath === e.path,
-            draggable: true,
-            onDragStart: ev => { try { ev.dataTransfer.setData('application/x-filebox-paths', JSON.stringify([e.path])) } catch {} ev.dataTransfer.effectAllowed = 'move'; setSelected(e.path) },
-            onDragOver: e.is_dir ? (ev => { if (hasFbPaths(ev)) { ev.preventDefault(); ev.dataTransfer.dropEffect = 'move'; setDropPath(e.path) } }) : undefined,
-            onDragLeave: e.is_dir ? (ev => { if (!ev.currentTarget.contains(ev.relatedTarget)) setDropPath(cur => cur === e.path ? null : cur) }) : undefined,
-            onDrop: e.is_dir ? (ev => { ev.preventDefault(); setDropPath(null); try { dropMove(JSON.parse(ev.dataTransfer.getData('application/x-filebox-paths') || '[]'), e.path) } catch {} }) : undefined,
-            onClick: () => setSelected(selected === e.path ? null : e.path),
-            onContextMenu: () => setSelected(e.path),
-            onDoubleClick: () => openEntry(e),
-            onKeyDown: ev => { if (ev.key === 'Enter') openEntry(e) },
+            draggable: !isTrash,
+            ...rowEvents(e, idx),
             'aria-label': e.name,
             children: [
               jsx(Thumb, { ctx, entry: e, px: iconPx, fallback: jsx('span', { className: 'hermes-fb-tileicon', children: jsx(Codicon, { name: iconFor(cat), size: iconPx }) }) }),
@@ -780,21 +1083,7 @@ function TabPane({ ctx, tabId, initialCwd, sort, setSort, tilePx, setTilePx, sho
               jsx('span', { className: 'hermes-fb-tilesub', children: e.is_dir ? '—' : fmtSize(e.size) }),
             ],
           }) }),
-          jsx(ContextMenuContent, { children: [
-            jsx(ContextMenuItem, { onSelect: () => quickOp('open', e), children: t('openFile') }),
-            jsx(ContextMenuItem, { onSelect: () => quickOp('rename', e), children: t('rename') }),
-            jsx(ContextMenuSeparator, {}),
-            jsx(ContextMenuItem, { onSelect: () => quickOp('copy', e), children: t('copy') }),
-            jsx(ContextMenuItem, { onSelect: () => quickOp('cut', e), children: t('cut') }),
-            jsx(ContextMenuItem, { onSelect: () => quickOp('paste', e), children: t('paste') }),
-            jsx(ContextMenuSeparator, {}),
-            jsx(ContextMenuItem, { onSelect: () => quickOp('compress', e), children: t('compress') }),
-            e.ext === '.zip' && jsx(ContextMenuItem, { onSelect: () => quickOp('extract', e), children: t('extract') }),
-            jsx(ContextMenuItem, { onSelect: () => quickOp('delete', e), variant: 'destructive', children: t('delete') }),
-            jsx(ContextMenuSeparator, {}),
-            jsx(ContextMenuItem, { onSelect: () => quickOp('copypath', e), children: t('copyPath') }),
-            jsx(ContextMenuItem, { onSelect: () => quickOp('reveal', e), children: t('reveal') }),
-          ] }),
+          jsx(ContextMenuContent, { children: menuItems(e) }),
         ] }, e.path)
         }),
       ] }),
@@ -802,14 +1091,16 @@ function TabPane({ ctx, tabId, initialCwd, sort, setSort, tilePx, setTilePx, sho
       jsxs('div', { className: 'hermes-fb-status', children: [
         jsx('span', { children: t('items', total) }),
         selEntry && jsx('span', { children: `${selEntry.name} · ${selEntry.is_dir ? '' : `${fmtSize(selEntry.size)} · `}${fmtDate(selEntry.mtime)}` }),
+        selEntries.length > 1 && jsx('span', { children: t('selectedN', selEntries.length, fmtSize(selEntries.reduce((a, x) => a + (x.is_dir ? 0 : (x.size || 0)), 0))) }),
         jsx('span', { style: { flex: 1 } }),
-        jsx('button', { className: 'hermes-fb-tbtn', style: { width: 'auto', fontSize: 11 }, onClick: () => setMkdirMode(!mkdirMode), children: `+ ${t('newFolder')}` }),
+        !isTrash && jsx('button', { className: 'hermes-fb-tbtn', style: { width: 'auto', fontSize: 11 }, onClick: () => setMkdirMode(!mkdirMode), children: `+ ${t('newFolder')}` }),
         jsx('button', { className: 'hermes-fb-tbtn', style: { width: 'auto', fontSize: 11 }, onClick: () => setShowHidden(!showHidden), children: showHidden ? '✓ hidden' : 'hidden' }),
       ] }),
       selEntry && jsxs('div', { className: 'hermes-fb-pvwrap', style: { height: previewH }, children: [
-        jsx('div', { className: 'hermes-fb-griph', onMouseDown: startPreviewDrag }),
-        jsx(Preview, { ctx, t, entry: selEntry, refetch: () => list.refetch(), select: setSelected }, selEntry.path),
+        jsx('div', { className: 'hermes-fb-griph', title: t('dragResize'), onPointerDown: startPreviewDrag }),
+        jsx(Preview, { ctx, t, entry: selEntry, refetch: () => list.refetch(), select: selectProp }, selEntry.path),
       ] }),
+      selEntries.length > 1 && jsx(MultiPanel, { ctx, t, entries: selEntries, cwd, clearSel, refresh: () => { list.refetch(); dirBump.set(dirBump.get() + 1) } }),
     ] }),
   ] })
 }
@@ -818,6 +1109,41 @@ function tabName(cwd) {
   if (!cwd) return 'Home'
   const parts = String(cwd).split(/[/\\]+/).filter(Boolean)
   return parts.pop() || cwd
+}
+
+function UpdateChip({ ctx, t }) {
+  const [st, setSt] = useState({ phase: 'idle', local: '', remote: '', msg: '' })
+  const check = async force => {
+    if (st.phase === 'checking' || st.phase === 'updating') return
+    setSt(s => ({ ...s, phase: 'checking' }))
+    try {
+      const r = await ctx.rest('/update-check', { method: 'POST', timeoutMs: 20000, body: { force: !!force } })
+      if (!r?.ok) setSt({ phase: 'error', local: r?.local || '', remote: '', msg: r?.error || 'check failed' })
+      else if (r.behind) setSt({ phase: 'behind', local: r.local, remote: r.remote, msg: '' })
+      else if (r.ahead) setSt({ phase: 'ahead', local: r.local, remote: r.remote, msg: '' })
+      else setSt({ phase: 'current', local: r.local, remote: r.remote, msg: '' })
+    } catch (e) {
+      setSt({ phase: 'error', local: '', remote: '', msg: String((e && e.message) || e).slice(0, 80) })
+    }
+  }
+  const doUpdate = async () => {
+    setSt(s => ({ ...s, phase: 'updating' }))
+    try {
+      const r = await ctx.rest('/update', { method: 'POST', timeoutMs: 180000, body: {} })
+      if (r?.ok) setSt({ phase: 'done', local: r.version || '', remote: '', msg: '' })
+      else setSt({ phase: 'error', local: '', remote: '', msg: String(r?.error || 'update failed').slice(0, 80) })
+    } catch (e) {
+      setSt({ phase: 'error', local: '', remote: '', msg: String((e && e.message) || e).slice(0, 80) })
+    }
+  }
+  useEffect(() => { check(false) }, [])
+  if (st.phase === 'behind') return jsx(Button, { size: 'micro', onClick: doUpdate, title: `v${st.local} installed — click to update`, children: `Update Now → v${st.remote}` })
+  if (st.phase === 'ahead') return jsx(Button, { size: 'micro', variant: 'ghost', title: t('aheadTip', st.local, st.remote), onClick: () => check(true), children: t('aheadV', st.local) })
+  if (st.phase === 'updating') return jsx(Button, { size: 'micro', disabled: true, children: jsxs('span', { style: { display: 'inline-flex', alignItems: 'center', gap: 4 }, children: [jsx(GlyphSpinner, { ariaLabel: t('checkingUpdate') }), 'Updating…'] }) })
+  if (st.phase === 'done') return jsx(Button, { size: 'micro', variant: 'ghost', title: t('updateDone'), onClick: () => check(true), children: `v${st.local} · reload to apply` })
+  if (st.phase === 'error') return jsx(Button, { size: 'micro', variant: 'ghost', title: `${st.msg} — click to retry`, onClick: () => check(true), children: 'Retry' })
+  if (st.phase === 'current') return jsx(Button, { size: 'micro', variant: 'ghost', title: t('upToDate', st.local), onClick: () => check(true), children: 'Up To Date' })
+  return jsx(Button, { size: 'micro', variant: 'ghost', disabled: true, title: t('checkingUpdate'), children: 'Checking…' })
 }
 
 function Explorer({ ctx }) {
@@ -839,8 +1165,12 @@ function Explorer({ ctx }) {
   const setSideWidth = v => { const n = Number(v) || 148; setSideWidthState(n); try { ctx.storage.set('sideWidth', n) } catch {} }
   const [sideCollapsed, setSideCollapsedState] = useState(() => ctx.storage.get('sideCollapsed', false) === true)
   const setSideCollapsed = v => { setSideCollapsedState(v); try { ctx.storage.set('sideCollapsed', v) } catch {} }
+  const [sideOrder, setSideOrderState] = useState(() => { try { const o = ctx.storage.get('sideOrder', null); return Array.isArray(o) ? o : null } catch { return null } })
+  const setSideOrder = v => { setSideOrderState(v); try { ctx.storage.set('sideOrder', v) } catch {} }
   const [previewH, setPreviewHState] = useState(() => Number(ctx.storage.get('previewH', 280)) || 280)
   const setPreviewH = v => { const n = Number(v) || 280; setPreviewHState(n); try { ctx.storage.set('previewH', n) } catch {} }
+  const [viewMode, setViewModeState] = useState(() => ctx.storage.get('viewMode', 'grid'))
+  const setViewMode = v => { setViewModeState(v); try { ctx.storage.set('viewMode', v) } catch {} }
   const [tabs, setTabsState] = useState(() => {
     try {
       const saved = ctx.storage.get('tabs', null)
@@ -891,7 +1221,8 @@ function Explorer({ ctx }) {
     ] }),
     ...tabs.map(x => jsx(TabPane, {
       ctx, tabId: x.id, initialCwd: x.cwd, sort, setSort, tilePx, setTilePx, showHidden, setShowHidden,
-      sideWidth, setSideWidth, sideCollapsed, setSideCollapsed, previewH, setPreviewH,
+      sideWidth, setSideWidth, sideCollapsed, setSideCollapsed, sideOrder, setSideOrder,
+      previewH, setPreviewH, viewMode, setViewMode,
       hidden: x.id !== active.id,
     }, x.id)),
   ] })

@@ -6,7 +6,37 @@ in tabs (`+` to open, `×` to close). The quick-access sidebar resizes by
 dragging its right edge and collapses with the `«` button (`»` rail to
 bring it back). Sort order, tile size, sidebar width, hidden-file
 toggle, pins, open tabs, and the active tab are all remembered between
-launches.
+launches. The sidebar (pins, Recycle Bin, drives) reorders by dragging
+rows up and down, and remembers the order.
+
+The `☰` button by the tile-size picker switches between the icon grid
+(S/M/L/XL) and a Windows-style details list (Name · Size · Modified ·
+Type, click a header to sort). The choice sticks between launches.
+
+## Selecting files
+
+Click selects one. `Ctrl`/`Cmd`-click toggles, `Shift`-click selects a
+range, `Ctrl+A` grabs the whole folder, `Esc` clears. With several
+selected, a batch panel offers **Copy / Cut / Delete** (second click
+confirms) and **Compress** into one zip. Right-click copy/cut/compress
+act on the whole selection when the clicked file is in it. Dragging a
+selection into a folder moves all of it.
+
+## Recycle Bin
+
+The sidebar has a **Recycle Bin** entry: deleted files and folders with
+their original location and deletion date. Select one (or several) →
+**Restore**, or right-click → Restore. The toolbar offers **Empty
+Recycle Bin** (click twice to confirm — permanent). Deletes from FileBox
+go to the bin, never vanish.
+
+## Moving files in and out
+
+- Drag a file out of FileBox into Explorer or onto the desktop — it
+  copies over (single files; zip folders first).
+- Right-click → **Copy outside Hermes**, then paste in Explorer.
+- Copy files in Explorer, then Paste inside a FileBox folder — they copy
+  in (works even when FileBox's own clipboard is empty).
 
 ## Install
 
@@ -18,7 +48,18 @@ launches.
    the **FileBox** chip bottom-right. Drag it to the right side and close the
    built-in files pane if you want it as your sidebar.
 
-.
+## Self-updates
+
+The tab strip shows the installed version. FileBox checks
+`imzacksong/hermes-filebox` on GitHub at most once a day (one small
+version-file fetch, cached in `.update-check.json` next to the plugin).
+When a newer version is published the chip becomes an **Update to v…**
+button: one click downloads the release tarball and overlays
+`plugin.yaml`, `dashboard/`, `desktop/`, and `README.md` onto your
+install, then tells you to restart the gateway and reload the window
+(Ctrl+K → Reload) to apply. Click the version chip any time to force a
+fresh check. Override repo/branch with the `FILEBOX_UPDATE_REPO` /
+`FILEBOX_UPDATE_BRANCH` env vars.
 
 ## Editing files
 
