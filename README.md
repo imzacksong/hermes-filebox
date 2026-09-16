@@ -1,21 +1,49 @@
 # Filebox — Explorer-style file browser for Hermes
 
-Quick access, breadcrumbs, icon grid (S/M/L/XL), search, and a preview pane
-with image / audio / video / PDF / text preview. Multiple folders stay open
-in tabs (`+` to open, `×` to close). The quick-access sidebar resizes by
-dragging its right edge and collapses with the `«` button (`»` rail to
-bring it back). Sort order, tile size, sidebar width, hidden-file
-toggle, pins, open tabs, and the active tab are all remembered between
-launches. Select a file → **Send to…**
-to share it over your home LAN, with an optional one-click heads-up to a
-paired Hermes agent over the peer mesh.
+A full file manager that lives inside the Hermes desktop app: tabbed panes,
+a resizable quick-access sidebar, icon grid, search, rich previews, full edit
+operations, LAN sharing, and an interactive 3D model viewer. Zero API keys,
+zero model tokens.
+
+## Features
+
+- **Tabbed browsing** — `+` opens a tab at your current folder, `×` closes.
+  Each tab keeps its own folder, history, selection, and search. Open tabs
+  restore across launches.
+- **Quick-access sidebar** — pin folders, browse drives with usage bars,
+  drag the edge to resize (80–320px), `«` collapses it to a `»` rail.
+  Width and state persist.
+- **Everything persists** — sort order, tile size (S/M/L/XL), hidden-file
+  toggle, pins, tabs, sidebar and preview sizes.
+- **Preview pane** — image, audio, and video playback, PDFs, text with
+  Read-full-file, and an ops bar (Copy path, Rename, Copy/Cut/Paste,
+  Delete, Compress, Extract). Resizes by dragging, `×` to close.
+- **Right-click menu** — the same ops on any tile, using Hermes's native
+  menu components.
+- **Full edit ops** — rename (inline), copy/cut/paste across tabs, two-click
+  delete, zip compress, extract-here. Collisions auto-resolve, drive roots
+  are refused, deletes are permanent (no recycle bin).
+- **Video thumbnails** — real frames via ffmpeg (falls back to icons
+  without it).
+- **3D models** — shaded thumbnails plus an interactive STL/OBJ viewer:
+  drag to rotate, `+`/`−` zoom, reset. No three.js, no new dependencies.
+- **LAN sharing** — Send to… serves any file over your Wi-Fi with a link;
+  optional one-click Tell button DMs a paired Hermes agent over the peer
+  mesh (see below).
 
 ## Install
 
-1. Copy the `filebox` folder into your Hermes plugins directory
-   (`%LOCALAPPDATA%\hermes\plugins\` on Windows, next to `sysmon`, `pals`, …).
-2. Enable it: `hermes plugins enable filebox` (then restart the gateway).
-3. In the Hermes desktop app: Settings → Plugins → turn on **Filebox**, then
+```sh
+git clone https://github.com/imzacksong/hermes-filebox.git
+cp -r hermes-filebox ~/.hermes/plugins/filebox   # Windows: %LOCALAPPDATA%\hermes\plugins\filebox
+```
+
+1. Copy this folder into your Hermes plugins directory
+   (`%LOCALAPPDATA%\hermes\plugins\` on Windows) and name it `filebox`.
+2. (Optional, paired agents only) Copy `dashboard/peer.example.json` to
+   `dashboard/peer.json` and fill in your peer slug, label, and agent name.
+3. Enable it: `hermes plugins enable filebox`, then restart the gateway.
+4. In the Hermes desktop app: Settings → Plugins → turn on **Filebox**, then
    reload (⌘K → Reload). The Explorer pane starts collapsed — open it from
    the **Explorer** chip bottom-right. Drag it to the right side and close the
    built-in files pane if you want it as your sidebar.
