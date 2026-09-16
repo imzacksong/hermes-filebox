@@ -8,40 +8,28 @@ bring it back). Sort order, tile size, sidebar width, hidden-file
 toggle, pins, open tabs, and the active tab are all remembered between
 launches.
 
-## Features
-
-- **Tabbed browsing** — `+` opens a tab at your current folder, `×` closes.
-  Each tab keeps its own folder, history, selection, and search. Open tabs
-  restore across launches.
-- **Drag and drop** — drag any tile into a folder (or another tab's folder)
-  to move it. Same-folder drops are ignored, collisions auto-resolve.
-- **Quick-access sidebar** — pin folders, browse drives with usage bars,
-  drag the edge to resize (80–320px), `«` collapses it to a `»` rail.
-  Width and state persist.
-- **Everything persists** — sort order, tile size (S/M/L/XL), hidden-file
-  toggle, pins, tabs, sidebar and preview sizes.
-- **Preview pane** — image, audio, and video playback, PDFs, text with
-  Read-full-file, and an ops bar (Copy path, Rename, Copy/Cut/Paste,
-  Delete, Compress, Extract). Resizes by dragging, `×` to close.
-- **Right-click menu** — the same ops on any tile, using Hermes's native
-  menu components.
-- **Full edit ops** — rename (inline), copy/cut/paste across tabs, two-click
-  delete to the recycle bin, zip compress, extract-here. Drive roots are
-  refused.
-- **Video thumbnails** — real frames via ffmpeg (falls back to icons
-  without it).
-- **3D models** — shaded thumbnails plus an interactive STL/OBJ viewer:
-  drag to rotate, `+`/`−` zoom, reset. No three.js, no new dependencies.
-
 ## Install
 
 1. Copy the `filebox` folder into your Hermes plugins directory
-   (`%LOCALAPPDATA%\hermes\plugins\` on Windows).
+   (`%LOCALAPPDATA%\hermes\plugins\` on Windows, next to `sysmon`, `pals`, …).
 2. Enable it: `hermes plugins enable filebox` (then restart the gateway).
 3. In the Hermes desktop app: Settings → Plugins → turn on **Filebox**, then
-   reload (⌘K → Reload). The Explorer pane starts collapsed — open it from
-   the **Explorer** chip bottom-right. Drag it to the right side and close the
+   reload (⌘K → Reload). The FileBox pane starts collapsed — open it from
+   the **FileBox** chip bottom-right. Drag it to the right side and close the
    built-in files pane if you want it as your sidebar.
+
+## Self-updates
+
+The tab strip shows the installed version (`v1.8.0`). FileBox checks
+`imzacksong/hermes-filebox` on GitHub at most once a day (one small
+version-file fetch, cached in `.update-check.json` next to the plugin).
+When a newer version is published the chip becomes an **Update to v…**
+button: one click downloads the release tarball and overlays
+`plugin.yaml`, `dashboard/`, `desktop/`, and `README.md` onto your
+install, then tells you to restart the gateway and reload the window
+(Ctrl+K → Reload) to apply. Click the version chip any time to force a
+fresh check. Override repo/branch with the `FILEBOX_UPDATE_REPO` /
+`FILEBOX_UPDATE_BRANCH` env vars.
 
 ## Editing files
 
