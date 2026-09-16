@@ -12,18 +12,9 @@ paired Hermes agent over the peer mesh.
 
 ## Install
 
-```sh
-git clone https://github.com/imzacksong/hermes-filebox.git
-cp -r hermes-filebox ~/.hermes/plugins/filebox   # Windows: %LOCALAPPDATA%\hermes\plugins\filebox
-```
-
-1. Copy the `hermes-filebox` folder into your Hermes plugins directory
-   (`%LOCALAPPDATA%\hermes\plugins\` on Windows, next to `sysmon`, `pals`, …)
-   and rename it to `filebox`.
-2. (Optional, paired agents only) Copy `dashboard/peer.example.json` to
-   `dashboard/peer.json` and fill in your peer slug, label, and agent name —
-   see "The Tell button" below.
-3. Enable it: `hermes plugins enable filebox` (then restart the gateway).
+1. Copy the `filebox` folder into your Hermes plugins directory
+   (`%LOCALAPPDATA%\hermes\plugins\` on Windows, next to `sysmon`, `pals`, …).
+2. Enable it: `hermes plugins enable filebox` (then restart the gateway).
 3. In the Hermes desktop app: Settings → Plugins → turn on **Filebox**, then
    reload (⌘K → Reload). The Explorer pane starts collapsed — open it from
    the **Explorer** chip bottom-right. Drag it to the right side and close the
@@ -65,9 +56,17 @@ No `peer.json` = defaults for the original machine (Zack → Nina via Milo).
 If you don't have a paired agent, ignore the button — the copy-link flow
 needs nothing.
 
+## Editing files
+
+Select anything to get **Rename** (inline, Enter to save), **Copy** / **Cut**,
+then **Paste** from the toolbar of the destination tab — the clipboard works
+across tabs. **Delete** asks for a second confirming click. **Compress** zips
+the selection next to itself; zips offer **Extract here**. Name collisions
+auto-resolve (`file (2).txt`). Deletes are permanent (no recycle bin) and
+drive roots are refused — you can't nuke `C:\` from here.
+
 ## Notes
 
 - Media/PDF previews load straight from disk; if a preview ever shows
   "blocked", Open / reveal still work.
 - Text preview shows the first 64KB with a **Read full file** option to 1MB.
-- Rename/delete are intentionally out — use Open/reveal for that.

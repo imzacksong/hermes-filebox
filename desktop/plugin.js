@@ -15,6 +15,7 @@ import { jsx, jsxs } from 'react/jsx-runtime'
 const ID = 'filebox'
 const RENDER_CAP = 400
 const collapsed = atom(true)
+const clipboard = atom(null)
 let paneCtx = null
 let paneRegister = null
 let paneDispose = null
@@ -40,6 +41,10 @@ const EN = {
   showHidden: 'Show hidden files',
   pinFolder: 'Pin this folder', unpinFolder: 'Unpin this folder',
   reveal: 'Show in Explorer', copyPath: 'Copy path', openFile: 'Open',
+  rename: 'Rename', save: 'Save',
+  copy: 'Copy', cut: 'Cut', paste: 'Paste',
+  delete: 'Delete', confirmDelete: 'Confirm delete?',
+  compress: 'Compress', extract: 'Extract here',
   openFailed: 'Could not open — revealed the folder instead.',
   items: n => `${n} item${n === 1 ? '' : 's'}`,
   showingFirst: (a, b) => `Showing ${a} of ${b} — refine search`,
@@ -183,7 +188,7 @@ function fileUrl(path) {
   return 'file:///' + String(path || '').replace(/\\/g, '/').split('/').map(encodeURIComponent).join('/')
 }
 
-function Preview({ ctx, t, entry }) {
+function Preview({ ctx, t, entry, refetch, select }) {
   const isImg = IMG_EXTS.has(entry.ext)
   const isAudio = AUD_EXTS.has(entry.ext)
   const isVideo = VID_EXTS.has(entry.ext)
@@ -207,6 +212,52 @@ function Preview({ ctx, t, entry }) {
       hostNotify(ctx, String((e && e.message) || e))
     }
     setSharing(false)
+  }
+  const [renameMode, setRenameMode] = useState(false)
+  const [renameName, setRenameName] = useState(entry.name)
+  const [confirmDel, setConfirmDel] = useState(false)
+  const [opBusy, setOpBusy] = useState(false)
+  const opErr = e => hostNotify(ctx, String((e && e.data && e.data.error) || (e && e.message) || e))
+  const doRename = async () => {
+    const name = (renameName || '').trim()
+    if (!name || name === entry.name) { setRenameMode(false); return }
+    setOpBusy(true)
+    try {
+      const r = await ctx.rest('/rename', { method: 'POST', timeoutMs: 15000, body: { path: entry.path, new_name: name } })
+      setRenameMode(false)
+      refetch()
+      if (r?.path) select(r.path)
+    } catch (e) { opErr(e) }
+    setOpBusy(false)
+  }
+  const doDelete = async () => {
+    if (!confirmDel) { setConfirmDel(true); return }
+    setOpBusy(true)
+    try {
+      const r = await ctx.rest('/delete', { method: 'POST', timeoutMs: 30000, body: { paths: [entry.path] } })
+      if (!r?.ok) opErr((r?.failed?.[0]?.error) || 'delete failed')
+      select(null)
+      refetch()
+    } catch (e) { opErr(e) }
+    setConfirmDel(false)
+    setOpBusy(false)
+  }
+  const doZip = async () => {
+    setOpBusy(true)
+    try {
+      await ctx.rest('/zip', { method: 'POST', timeoutMs: 60000, body: { paths: [entry.path] } })
+      refetch()
+    } catch (e) { opErr(e) }
+    setOpBusy(false)
+  }
+  const doExtract = async () => {
+    setOpBusy(true)
+    try {
+      const r = await ctx.rest('/extract', { method: 'POST', timeoutMs: 60000, body: { path: entry.path } })
+      if (r?.path) hostNotify(ctx, 'Extracted to ' + r.path)
+      refetch()
+    } catch (e) { opErr(e) }
+    setOpBusy(false)
   }
   const stopShare = async () => {
     if (share?.token) {
@@ -284,6 +335,19 @@ function Preview({ ctx, t, entry }) {
       jsx(Button, { size: 'micro', variant: 'ghost', onClick: () => ctx.os.revealPath(entry.is_dir ? entry.path : entry.path.replace(/[/\\][^/\\]+$/, '')), children: t('reveal') }),
       jsx(Button, { size: 'micro', variant: 'ghost', onClick: () => ctx.os.writeClipboard(entry.path), children: t('copyPath') }),
     ] }),
+    renameMode && jsxs('div', { className: 'hermes-fb-actions', children: [
+      jsx('input', { value: renameName, onChange: e => setRenameName(e.target.value), onKeyDown: e => { if (e.key === 'Enter') doRename() }, autoFocus: true, 'aria-label': t('rename'), style: { flex: 1, minWidth: 0, height: 24, fontSize: 12, padding: '0 6px', borderRadius: 4, border: '1px solid var(--ui-stroke-secondary)', background: 'transparent', color: 'var(--ui-text-primary)' } }),
+      jsx(Button, { size: 'micro', onClick: doRename, disabled: opBusy, children: t('save') }),
+      jsx(Button, { size: 'micro', variant: 'ghost', onClick: () => setRenameMode(false), children: t('cancel') }),
+    ] }),
+    !renameMode && jsxs('div', { className: 'hermes-fb-actions', children: [
+      jsx(Button, { size: 'micro', variant: 'ghost', onClick: () => { setRenameName(entry.name); setConfirmDel(false); setRenameMode(true) }, children: t('rename') }),
+      jsx(Button, { size: 'micro', variant: 'ghost', onClick: () => clipboard.set({ mode: 'copy', paths: [entry.path], label: entry.name }), children: t('copy') }),
+      jsx(Button, { size: 'micro', variant: 'ghost', onClick: () => clipboard.set({ mode: 'cut', paths: [entry.path], label: entry.name }), children: t('cut') }),
+      jsx(Button, { size: 'micro', variant: 'ghost', onClick: doDelete, disabled: opBusy, children: confirmDel ? t('confirmDelete') : t('delete') }),
+      jsx(Button, { size: 'micro', variant: 'ghost', onClick: doZip, disabled: opBusy, children: t('compress') }),
+      entry.ext === '.zip' && jsx(Button, { size: 'micro', variant: 'ghost', onClick: doExtract, disabled: opBusy, children: t('extract') }),
+    ] }),
     share?.url && jsxs('div', { children: [
       jsx('input', { value: share.url, readOnly: true, 'aria-label': 'share link', onFocus: e => e.target.select(), style: { width: '100%', height: 24, fontSize: 11, padding: '0 6px', borderRadius: 4, border: '1px solid var(--ui-stroke-secondary)', background: 'transparent', color: 'var(--ui-text-primary)', boxSizing: 'border-box', marginTop: 6 } }),
       jsxs('div', { className: 'hermes-fb-actions', children: [
@@ -313,6 +377,7 @@ function TabPane({ ctx, tabId, initialCwd, sort, setSort, tilePx, setTilePx, sho
   const [pins, setPins] = useState(() => ctx.storage.get('pins', null))
   const [mkdirMode, setMkdirMode] = useState(false)
   const [mkdirName, setMkdirName] = useState('')
+  const clip = useValue(clipboard)
 
   const roots = useQuery({
     queryKey: [ID, 'roots'],
@@ -410,6 +475,17 @@ function TabPane({ ctx, tabId, initialCwd, sort, setSort, tilePx, setTilePx, sho
     window.addEventListener('mouseup', up)
   }
 
+  const doPaste = async () => {
+    const c = clipboard.get()
+    if (!c || !cwd) return
+    try {
+      const r = await ctx.rest(c.mode === 'cut' ? '/move' : '/copy', { method: 'POST', timeoutMs: 60000, body: { paths: c.paths, dest_dir: cwd } })
+      if (!r?.ok) hostNotify(ctx, ((r?.failed?.[0]?.error) || 'paste failed') + (r?.done?.length ? ` (${r.done.length} ok)` : ''))
+      else if (c.mode === 'cut') clipboard.set(null)
+      list.refetch()
+    } catch (e) { hostNotify(ctx, String((e && e.message) || e)) }
+  }
+
   const openEntry = async e => {
     if (e.is_dir) { nav(e.path); return }
     const url = `file:///${e.path.replace(/\\/g, '/')}`
@@ -454,6 +530,7 @@ function TabPane({ ctx, tabId, initialCwd, sort, setSort, tilePx, setTilePx, sho
         jsx('button', { className: 'hermes-fb-tbtn', disabled: !fwd.length, 'aria-label': t('fwd'), title: t('fwd'), onClick: goFwd, children: '→' }),
         jsx('button', { className: 'hermes-fb-tbtn', disabled: !list.data?.parent, 'aria-label': t('up'), title: t('up'), onClick: () => list.data?.parent && nav(list.data.parent), children: '↑' }),
         jsx('button', { className: 'hermes-fb-tbtn', 'aria-label': t('refresh'), title: t('refresh'), onClick: () => list.refetch(), children: '↻' }),
+        clip && jsx('button', { className: 'hermes-fb-tbtn', style: { width: 'auto', fontSize: 11, padding: '0 6px' }, title: `${t('paste')} ${clip.label || ''}`.trim(), onClick: doPaste, children: t('paste') }),
         jsx('div', { className: 'hermes-fb-crumbs', children:
           crumbs.map((c, i) => {
             const upto = crumbs.slice(0, i + 1).join('\\') + (i === 0 && /^[A-Za-z]:\\$/.test(c) ? '' : '')
@@ -519,7 +596,7 @@ function TabPane({ ctx, tabId, initialCwd, sort, setSort, tilePx, setTilePx, sho
         jsx('button', { className: 'hermes-fb-tbtn', style: { width: 'auto', fontSize: 11 }, onClick: () => setMkdirMode(!mkdirMode), children: `+ ${t('newFolder')}` }),
         jsx('button', { className: 'hermes-fb-tbtn', style: { width: 'auto', fontSize: 11 }, onClick: () => setShowHidden(!showHidden), children: showHidden ? '✓ hidden' : 'hidden' }),
       ] }),
-      selEntry && jsx(Preview, { ctx, t, entry: selEntry }, selEntry.path),
+      selEntry && jsx(Preview, { ctx, t, entry: selEntry, refetch: () => list.refetch(), select: setSelected }, selEntry.path),
     ] }),
   ] })
 }

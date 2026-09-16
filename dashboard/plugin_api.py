@@ -1,7 +1,9 @@
-"""Filebox backend — local filesystem reads for the Explorer-style pane.
+"""Filebox backend — local filesystem reads AND writes for the Explorer-style pane.
 
 Mounted at /api/plugins/filebox/. Localhost only, same trust as the terminal:
-reads anything the user could `dir`, plus mkdir. No rename/delete in v1.
+reads anything the user could `dir`, writes anything they could do in Explorer
+(rename/copy/move/delete/mkdir/zip/extract). Destructive ops are recursive;
+the UI confirms before delete.
 """
 from __future__ import annotations
 
@@ -14,6 +16,7 @@ import shutil
 import socket
 import subprocess
 import threading
+import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -49,6 +52,210 @@ class ThumbIn(BaseModel):
 class MkdirIn(BaseModel):
     parent: str = ""
     name: str = ""
+
+
+BAD_NAME_CHARS = '/\\:*?"<>|'
+
+
+def _clean_name(name: str) -> str:
+    return (name or "").strip().rstrip(". ")
+
+
+def _free_path(p: Path) -> Path:
+    if not p.exists():
+        return p
+    stem, suffix = (p.stem, p.suffix) if p.suffix else (p.name, "")
+    # for dirs p.suffix may be a fake extension (e.g. "data.old") — treat
+    # dotted dir names carefully: only split when it's actually a file
+    if p.is_dir():
+        stem, suffix = p.name, ""
+    i = 2
+    while True:
+        cand = p.parent / f"{stem} ({i}){suffix}"
+        if not cand.exists():
+            return cand
+        i += 1
+
+
+def _guard_root(p: Path) -> Optional[JSONResponse]:
+    try:
+        if p.parent == p:
+            return JSONResponse({"error": "refusing drive root"}, status_code=400)
+    except Exception:
+        return JSONResponse({"error": "bad path"}, status_code=400)
+    return None
+
+
+class RenameIn(BaseModel):
+    path: str = ""
+    new_name: str = ""
+
+
+@router.post("/rename")
+def rename(body: RenameIn) -> JSONResponse:
+    name = _clean_name(body.new_name)
+    if not name or any(c in name for c in BAD_NAME_CHARS):
+        return JSONResponse({"error": "bad name"}, status_code=400)
+    try:
+        src = Path(body.path)
+        if not src.exists():
+            return JSONResponse({"error": "not found"}, status_code=404)
+        if (g := _guard_root(src)):
+            return g
+        dst = src.parent / name
+        if dst.exists():
+            return JSONResponse({"error": "already exists"}, status_code=409)
+        src.rename(dst)
+        return JSONResponse({"ok": True, "path": str(dst)})
+    except PermissionError:
+        return JSONResponse({"error": "access denied"}, status_code=403)
+    except Exception as e:
+        return JSONResponse({"error": str(e)[:200]}, status_code=500)
+
+
+class OpIn(BaseModel):
+    paths: List[str] = []
+    dest_dir: str = ""
+
+
+def _paste(op: str, body: OpIn) -> JSONResponse:
+    if not body.paths:
+        return JSONResponse({"error": "nothing selected"}, status_code=400)
+    try:
+        dest = Path(body.dest_dir)
+        if not dest.is_dir():
+            return JSONResponse({"error": "bad destination"}, status_code=400)
+        done, failed = [], []
+        for raw in body.paths:
+            try:
+                src = Path(raw)
+                if not src.exists():
+                    failed.append({"path": raw, "error": "not found"})
+                    continue
+                if op == "move" and (g := _guard_root(src)):
+                    failed.append({"path": raw, "error": "drive root"})
+                    continue
+                if src.is_dir() and (dest.resolve() == src.resolve() or src.resolve() in dest.resolve().parents):
+                    failed.append({"path": raw, "error": "can't paste into itself"})
+                    continue
+                dst = _free_path(dest / src.name)
+                if op == "copy":
+                    if src.is_dir():
+                        shutil.copytree(src, dst)
+                    else:
+                        shutil.copy2(src, dst)
+                else:
+                    shutil.move(str(src), str(dst))
+                done.append(str(dst))
+            except PermissionError:
+                failed.append({"path": raw, "error": "access denied"})
+            except Exception as e:
+                failed.append({"path": raw, "error": str(e)[:120]})
+        return JSONResponse({"ok": not failed, "done": done, "failed": failed})
+    except Exception as e:
+        return JSONResponse({"error": str(e)[:200]}, status_code=500)
+
+
+@router.post("/copy")
+def copy(body: OpIn) -> JSONResponse:
+    return _paste("copy", body)
+
+
+@router.post("/move")
+def move(body: OpIn) -> JSONResponse:
+    return _paste("move", body)
+
+
+class DeleteIn(BaseModel):
+    paths: List[str] = []
+
+
+@router.post("/delete")
+def delete(body: DeleteIn) -> JSONResponse:
+    if not body.paths:
+        return JSONResponse({"error": "nothing selected"}, status_code=400)
+    done, failed = [], []
+    for raw in body.paths:
+        try:
+            p = Path(raw)
+            if not p.exists():
+                failed.append({"path": raw, "error": "not found"})
+                continue
+            if (g := _guard_root(p)):
+                failed.append({"path": raw, "error": "drive root"})
+                continue
+            if p.is_dir() and not p.is_symlink():
+                shutil.rmtree(p)
+            else:
+                p.unlink()
+            done.append(raw)
+        except PermissionError:
+            failed.append({"path": raw, "error": "access denied"})
+        except Exception as e:
+            failed.append({"path": raw, "error": str(e)[:120]})
+    return JSONResponse({"ok": not failed, "done": done, "failed": failed})
+
+
+class ZipIn(BaseModel):
+    paths: List[str] = []
+    name: str = ""
+
+
+@router.post("/zip")
+def make_zip(body: ZipIn) -> JSONResponse:
+    if not body.paths:
+        return JSONResponse({"error": "nothing selected"}, status_code=400)
+    try:
+        first = Path(body.paths[0])
+        parent = first.parent
+        base = _clean_name(body.name) or (first.stem if len(body.paths) == 1 else "archive")
+        if any(c in base for c in BAD_NAME_CHARS):
+            return JSONResponse({"error": "bad name"}, status_code=400)
+        if not base.lower().endswith(".zip"):
+            base += ".zip"
+        zpath = _free_path(parent / base)
+        with zipfile.ZipFile(zpath, "w", zipfile.ZIP_DEFLATED) as z:
+            for raw in body.paths:
+                src = Path(raw)
+                if not src.exists():
+                    continue
+                if src.is_dir() and not src.is_symlink():
+                    for root, _, files in os.walk(src):
+                        for fn in files:
+                            fp = Path(root) / fn
+                            z.write(fp, fp.relative_to(parent))
+                else:
+                    z.write(src, src.name)
+        return JSONResponse({"ok": True, "path": str(zpath)})
+    except PermissionError:
+        return JSONResponse({"error": "access denied"}, status_code=403)
+    except Exception as e:
+        return JSONResponse({"error": str(e)[:200]}, status_code=500)
+
+
+class ExtractIn(BaseModel):
+    path: str = ""
+    dest_dir: str = ""
+
+
+@router.post("/extract")
+def extract_zip(body: ExtractIn) -> JSONResponse:
+    try:
+        src = Path(body.path)
+        if not src.is_file() or src.suffix.lower() != ".zip":
+            return JSONResponse({"error": "not a zip"}, status_code=400)
+        dest = Path(body.dest_dir) if body.dest_dir else src.parent / src.stem
+        if dest.exists() and not dest.is_dir():
+            return JSONResponse({"error": "destination blocked"}, status_code=409)
+        dest = _free_path(dest) if dest.exists() else dest
+        dest.mkdir(parents=True, exist_ok=True)
+        with zipfile.ZipFile(src, "r") as z:
+            z.extractall(dest)
+        return JSONResponse({"ok": True, "path": str(dest)})
+    except PermissionError:
+        return JSONResponse({"error": "access denied"}, status_code=403)
+    except Exception as e:
+        return JSONResponse({"error": str(e)[:200]}, status_code=500)
 
 
 def _is_hidden(p: Path, entry_hidden: bool = False) -> bool:

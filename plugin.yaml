@@ -1,4 +1,4 @@
 name: filebox
-version: 1.2.0
-description: "Windows-Explorer-style file browser pane: tabs, resizable sidebar, quick access, breadcrumbs, icon grid, search, previews, LAN sharing."
+version: 1.3.0
+description: "Windows-Explorer-style file browser pane: tabs, resizable sidebar, rename/copy/move/delete/zip, search, previews, LAN sharing."
 author: "Tala + Zack"
