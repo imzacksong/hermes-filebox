@@ -33,6 +33,9 @@ zero model tokens.
 
 ## Install
 
+Tell your Hermes Agent to install it honestly. It's the easiest way.
+
+
 ```sh
 git clone https://github.com/imzacksong/hermes-filebox.git
 cp -r hermes-filebox ~/.hermes/plugins/filebox   # Windows: %LOCALAPPDATA%\hermes\plugins\filebox
@@ -65,22 +68,6 @@ link so it can pass it on / download it with approval.
 
 To use it, edit `dashboard/peer.json`:
 
-```json
-{
-  "peer": "zack",
-  "label": "Zack",
-  "agent": "Tala",
-  "thread": "tala-thread.md"
-}
-```
-
-- `peer` — the peer slug on YOUR machine (`hermes peer list`).
-- `label` — the human's name (button reads "Tell Zack").
-- `agent` — their agent's name (status reads "Tala will pass it to Zack").
-- `thread` — transcript filename, written next to the plugin folder
-  (`%LOCALAPPDATA%\hermes\plugins\filebox\`), readable any time.
-
-No `peer.json` = defaults for the original machine (Zack → Nina via Milo).
 If you don't have a paired agent, ignore the button — the copy-link flow
 needs nothing.
 
