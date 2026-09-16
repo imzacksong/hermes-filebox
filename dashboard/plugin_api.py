@@ -743,3 +743,263 @@ def update_plugin() -> Dict[str, Any]:
                 "note": "Restart the gateway, then reload the Hermes window to apply."}
     except Exception as e:
         return JSONResponse({"ok": False, "error": str(e)[:200]}, status_code=500)
+
+
+def _trash_parse_i(data: bytes) -> Optional[Dict[str, Any]]:
+    """Parse a $I recycle-bin metadata file: size + deleted time + original path."""
+    import struct
+    try:
+        if len(data) < 28:
+            return None
+        ver = struct.unpack("<q", data[0:8])[0]
+        size = struct.unpack("<q", data[8:16])[0]
+        ft = struct.unpack("<q", data[16:24])[0]
+        # v1: path at 24; v2 (Win8+): 4-byte path-length field, path at 28.
+        # NOTE: never search the raw bytes for b"\x00\x00" — the low byte of
+        # the last char plus the terminator aliases as a false end. Decode
+        # first (NUL is illegal in Windows paths), then cut at the NUL char.
+        off = 28 if ver == 2 else 24
+        orig = data[off:].decode("utf-16-le", "replace").split("\x00", 1)[0]
+        deleted = max(0, (ft - 116444736000000000) // 10000000)
+        return {"size": max(0, size), "deleted": deleted, "orig": orig}
+    except Exception:
+        return None
+
+
+def _trash_roots() -> List[Path]:
+    roots = []
+    for d in "CDEFGHIJKLMNOPQRSTUVWXYZ":
+        rb = Path(f"{d}:\\$Recycle.Bin")
+        try:
+            if rb.is_dir():
+                roots.append(rb)
+        except Exception:
+            pass
+    return roots
+
+
+def _trash_scan() -> List[Dict[str, Any]]:
+    items = []
+    for rb in _trash_roots():
+        try:
+            sids = [x for x in rb.iterdir() if x.is_dir()]
+        except Exception:
+            continue
+        for sid in sids:
+            try:
+                inames = [x for x in sid.iterdir()
+                          if x.is_file() and x.name.startswith("$I")]
+            except Exception:
+                continue
+            for ip in inames:
+                try:
+                    meta = _trash_parse_i(ip.read_bytes())
+                    if not meta or not meta["orig"]:
+                        continue
+                    rfile = ip.parent / ("$R" + ip.name[2:])
+                    size = meta["size"]
+                    try:
+                        if rfile.exists():
+                            size = rfile.stat().st_size if rfile.is_file() else size
+                    except Exception:
+                        pass
+                    is_dir = False
+                    try:
+                        is_dir = rfile.is_dir()
+                    except Exception:
+                        pass
+                    name = Path(meta["orig"]).name or ip.name
+                    ext = "" if is_dir else Path(name).suffix.lower()
+                    items.append({
+                        "id": f"{sid.name}/{ip.name}",
+                        "name": name,
+                        "path": f"trash://{sid.name}/{ip.name}",
+                        "orig": meta["orig"],
+                        "deleted": meta["deleted"],
+                        "size": size,
+                        "mtime": meta["deleted"],
+                        "is_dir": is_dir,
+                        "ext": ext,
+                    })
+                except Exception:
+                    continue
+    items.sort(key=lambda x: -x["deleted"])
+    return items
+
+
+def _trash_resolve(item_id: str) -> Optional[Dict[str, Any]]:
+    for it in _trash_scan():
+        if it["id"] == item_id or it["path"] == item_id:
+            return it
+    return None
+
+
+@router.post("/trash")
+def trash_list() -> Dict[str, Any]:
+    try:
+        return {"ok": True, "items": _trash_scan()}
+    except Exception as e:
+        return {"ok": False, "error": str(e)[:200], "items": []}
+
+
+@router.post("/trash-empty")
+def trash_empty() -> Dict[str, Any]:
+    removed = 0
+    try:
+        import ctypes
+        SHERB_NOCONFIRMATION, SHERB_NOPROGRESSUI, SHERB_NOSOUND = 0x1, 0x2, 0x4
+        rc = ctypes.windll.shell32.SHEmptyRecycleBinW(
+            None, None, SHERB_NOCONFIRMATION | SHERB_NOPROGRESSUI | SHERB_NOSOUND)
+        if rc == 0:
+            return {"ok": True, "removed": -1}
+    except Exception:
+        pass
+    for rb in _trash_roots():
+        try:
+            sids = [x for x in rb.iterdir() if x.is_dir()]
+        except Exception:
+            continue
+        for sid in sids:
+            try:
+                files = [x for x in sid.iterdir() if x.is_file()]
+            except Exception:
+                continue
+            for f in files:
+                try:
+                    f.unlink()
+                    removed += 1
+                except Exception:
+                    pass
+    return {"ok": True, "removed": removed}
+
+
+class TrashRestoreIn(BaseModel):
+    id: str = ""
+
+
+@router.post("/trash-restore")
+def trash_restore(body: TrashRestoreIn) -> Dict[str, Any]:
+    it = _trash_resolve(body.id)
+    if not it:
+        return JSONResponse({"ok": False, "error": "item not found"}, status_code=404)
+    try:
+        rest = body.id.split("trash://", 1)[1] if "trash://" in body.id else body.id
+        sid_name, iname = rest.split("/", 1)
+        rfile = None
+        iname_r = "$R" + iname[2:] if iname.startswith("$I") else iname
+        for rb in _trash_roots():
+            cand = rb / sid_name / iname_r
+            try:
+                if cand.exists() or os.path.isdir(str(cand)):
+                    rfile = cand
+                    break
+            except Exception:
+                continue
+        if rfile is None:
+            return JSONResponse({"ok": False, "error": "backing file gone"}, status_code=410)
+        dest = Path(it["orig"])
+        try:
+            if not dest.parent.is_dir():
+                return JSONResponse(
+                    {"ok": False, "error": "original folder no longer exists"},
+                    status_code=409)
+        except Exception:
+            return JSONResponse({"ok": False, "error": "bad original path"},
+                                status_code=400)
+        if dest.exists() or os.path.lexists(str(dest)):
+            dest = _free_path(dest)
+        os.rename(str(rfile), str(dest))
+        try:
+            (rfile.parent / iname).unlink()
+        except Exception:
+            pass
+        return {"ok": True, "path": str(dest)}
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)[:200]}, status_code=500)
+
+
+def _ps_quote(s: str) -> str:
+    return "'" + s.replace("'", "''") + "'"
+
+
+def _os_clipboard_files() -> List[str]:
+    """Read the Windows Explorer file clipboard (copy/paste outside Hermes)."""
+    try:
+        out = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-Command",
+             "Get-Clipboard -Format FileDropList | ForEach-Object { $_.FullName }"],
+            capture_output=True, text=True, timeout=30)
+        if out.returncode != 0:
+            return []
+        return [ln.strip() for ln in (out.stdout or "").splitlines()
+                if ln.strip() and os.path.exists(ln.strip())]
+    except Exception:
+        return []
+
+
+@router.get("/dl")
+def download_file(path: str = ""):
+    """Direct file download for drag-out to Explorer (DownloadURL flavor).
+
+    Files only, localhost callers. Folders can't ride DownloadURL —
+    compress them first.
+    """
+    from fastapi.responses import FileResponse
+    try:
+        p = Path(path)
+        if not path or not p.is_file():
+            return JSONResponse({"ok": False, "error": "file only"}, status_code=400)
+        return FileResponse(str(p), filename=p.name)
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)[:200]}, status_code=500)
+
+
+class CopyOutIn(BaseModel):
+    paths: List[str] = []
+
+
+@router.post("/copy-out")
+def copy_out(body: CopyOutIn) -> Dict[str, Any]:
+    """Put real files on the Windows clipboard so they paste into Explorer."""
+    paths = [p for p in body.paths
+             if p and not p.startswith("trash://") and os.path.exists(p)]
+    if not paths:
+        return JSONResponse({"ok": False, "error": "nothing to copy"}, status_code=400)
+    try:
+        arr = ",".join(_ps_quote(p) for p in paths)
+        cmd = ("Add-Type -AssemblyName System.Windows.Forms; "
+               f"$c = New-Object System.Collections.Specialized.StringCollection; "
+               f"$c.AddRange(@({arr})); "
+               "[System.Windows.Forms.Clipboard]::SetFileDropList($c)")
+        out = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-STA", "-Command", cmd],
+            capture_output=True, text=True, timeout=30)
+        if out.returncode != 0:
+            return JSONResponse(
+                {"ok": False, "error": (out.stderr or "clipboard failed")[:200]},
+                status_code=500)
+        return {"ok": True, "count": len(paths)}
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)[:200]}, status_code=500)
+
+
+class PasteOsIn(BaseModel):
+    dest: str = ""
+
+
+@router.post("/paste-os")
+def paste_os(body: PasteOsIn) -> Dict[str, Any]:
+    """Paste files copied in Explorer into a FileBox folder."""
+    if not body.dest or body.dest.startswith("trash://"):
+        return JSONResponse({"ok": False, "error": "bad destination"}, status_code=400)
+    try:
+        dest = Path(body.dest)
+        if not dest.is_dir():
+            return JSONResponse({"ok": False, "error": "bad destination"}, status_code=400)
+        paths = _os_clipboard_files()
+        if not paths:
+            return JSONResponse({"ok": False, "error": "system clipboard has no files"},
+                                status_code=404)
+        return _paste("copy", OpIn(paths=paths, dest_dir=str(dest)))
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)[:200]}, status_code=500)

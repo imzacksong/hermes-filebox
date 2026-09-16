@@ -1,1 +1,1 @@
-{"api": "plugin_api.py", "description": "Filesystem CRUD, zip/extract, video + 3D thumbs, text reads, self-updates.", "label": "Filebox", "name": "filebox", "version": "1.8.0"}
+{"api": "plugin_api.py", "description": "Filesystem CRUD, zip/extract, recycle bin, video + 3D thumbs, text reads, OS drag/copy, self-updates.", "label": "Filebox", "name": "filebox", "version": "1.9.0"}

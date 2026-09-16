@@ -1,4 +1,4 @@
 name: filebox
-version: 1.8.0
-description: "Windows-Explorer-style file browser: tabs, drag-and-drop, CRUD/zip, video + 3D thumbs, STL/OBJ viewer, right-click menu, self-updates."
+version: 1.9.0
+description: "Windows-Explorer-style file browser: tabs, multi-select, drag-and-drop, CRUD/zip, recycle bin, video + 3D thumbs, STL/OBJ viewer, right-click menu, OS drag/copy, self-updates."
 author: "Tala + Zack"
