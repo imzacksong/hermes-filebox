@@ -849,13 +849,12 @@ function UpdateChip({ ctx, t }) {
     }
   }
   useEffect(() => { check(false) }, [])
-  const base = { className: 'hermes-fb-tbtn', style: { width: 'auto', padding: '0 6px', fontSize: 10, gap: 4 } }
-  if (st.phase === 'behind') return jsx('button', { ...base, style: { ...base.style, color: 'var(--ui-accent)', fontWeight: 600 }, title: `v${st.local} installed`, onClick: doUpdate, children: t('updateTo', st.remote) })
-  if (st.phase === 'updating') return jsx('button', { ...base, disabled: true, title: t('checkingUpdate'), children: jsx(GlyphSpinner, { ariaLabel: t('checkingUpdate') }) })
-  if (st.phase === 'done') return jsx('button', { ...base, style: { ...base.style, color: 'var(--ui-accent)' }, title: t('updateDone'), onClick: () => check(true), children: `v${st.local} · reload` })
-  if (st.phase === 'error') return jsx('button', { ...base, title: `${st.msg} — click to retry`, onClick: () => check(true), children: '!' })
-  if (st.phase === 'current') return jsx('button', { ...base, title: t('upToDate', st.local), onClick: () => check(true), children: `v${st.local}` })
-  return jsx('button', { ...base, disabled: true, title: t('checkingUpdate'), children: '…' })
+  if (st.phase === 'behind') return jsx(Button, { size: 'micro', onClick: doUpdate, title: `v${st.local} installed — click to update`, children: `Update Now → v${st.remote}` })
+  if (st.phase === 'updating') return jsx(Button, { size: 'micro', disabled: true, children: jsxs('span', { style: { display: 'inline-flex', alignItems: 'center', gap: 4 }, children: [jsx(GlyphSpinner, { ariaLabel: t('checkingUpdate') }), 'Updating…'] }) })
+  if (st.phase === 'done') return jsx(Button, { size: 'micro', variant: 'ghost', title: t('updateDone'), onClick: () => check(true), children: `v${st.local} · reload to apply` })
+  if (st.phase === 'error') return jsx(Button, { size: 'micro', variant: 'ghost', title: `${st.msg} — click to retry`, onClick: () => check(true), children: 'Retry' })
+  if (st.phase === 'current') return jsx(Button, { size: 'micro', variant: 'ghost', title: t('upToDate', st.local), onClick: () => check(true), children: 'Up To Date' })
+  return jsx(Button, { size: 'micro', variant: 'ghost', disabled: true, title: t('checkingUpdate'), children: 'Checking…' })
 }
 
 function Explorer({ ctx }) {
