@@ -1,0 +1,6 @@
+{
+  "peer": "peerslug",
+  "label": "Friend",
+  "agent": "TheirAgent",
+  "thread": "shared-thread.md"
+}

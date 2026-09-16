@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+peer.json
+*.thread.md
+*-thread.md
