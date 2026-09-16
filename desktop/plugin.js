@@ -74,10 +74,6 @@ const EN = {
   resetView: 'Reset view',
   readFull: 'Read full file',
   showLess: 'Show less',
-  updateTo: v => `Update to v${v}`,
-  checkingUpdate: 'Checking for updates…',
-  upToDate: v => `v${v} · up to date`,
-  updateDone: 'Updated — restart the gateway and reload the window to apply.',
 }
 const LOCALES = { en: EN }
 
@@ -824,40 +820,6 @@ function tabName(cwd) {
   return parts.pop() || cwd
 }
 
-function UpdateChip({ ctx, t }) {
-  const [st, setSt] = useState({ phase: 'idle', local: '', remote: '', msg: '' })
-  const check = async force => {
-    if (st.phase === 'checking' || st.phase === 'updating') return
-    setSt(s => ({ ...s, phase: 'checking' }))
-    try {
-      const r = await ctx.rest('/update-check', { method: 'POST', timeoutMs: 20000, body: { force: !!force } })
-      if (!r?.ok) setSt({ phase: 'error', local: r?.local || '', remote: '', msg: r?.error || 'check failed' })
-      else if (r.behind) setSt({ phase: 'behind', local: r.local, remote: r.remote, msg: '' })
-      else setSt({ phase: 'current', local: r.local, remote: r.remote, msg: '' })
-    } catch (e) {
-      setSt({ phase: 'error', local: '', remote: '', msg: String((e && e.message) || e).slice(0, 80) })
-    }
-  }
-  const doUpdate = async () => {
-    setSt(s => ({ ...s, phase: 'updating' }))
-    try {
-      const r = await ctx.rest('/update', { method: 'POST', timeoutMs: 180000, body: {} })
-      if (r?.ok) setSt({ phase: 'done', local: r.version || '', remote: '', msg: '' })
-      else setSt({ phase: 'error', local: '', remote: '', msg: String(r?.error || 'update failed').slice(0, 80) })
-    } catch (e) {
-      setSt({ phase: 'error', local: '', remote: '', msg: String((e && e.message) || e).slice(0, 80) })
-    }
-  }
-  useEffect(() => { check(false) }, [])
-  const base = { className: 'hermes-fb-tbtn', style: { width: 'auto', padding: '0 6px', fontSize: 10, gap: 4 } }
-  if (st.phase === 'behind') return jsx('button', { ...base, style: { ...base.style, color: 'var(--ui-accent)', fontWeight: 600 }, title: `v${st.local} installed`, onClick: doUpdate, children: t('updateTo', st.remote) })
-  if (st.phase === 'updating') return jsx('button', { ...base, disabled: true, title: t('checkingUpdate'), children: jsx(GlyphSpinner, { ariaLabel: t('checkingUpdate') }) })
-  if (st.phase === 'done') return jsx('button', { ...base, style: { ...base.style, color: 'var(--ui-accent)' }, title: t('updateDone'), onClick: () => check(true), children: `v${st.local} · reload` })
-  if (st.phase === 'error') return jsx('button', { ...base, title: `${st.msg} — click to retry`, onClick: () => check(true), children: '!' })
-  if (st.phase === 'current') return jsx('button', { ...base, title: t('upToDate', st.local), onClick: () => check(true), children: `v${st.local}` })
-  return jsx('button', { ...base, disabled: true, title: t('checkingUpdate'), children: '…' })
-}
-
 function Explorer({ ctx }) {
   const t = usePluginI18n(ID)
   const roots = useQuery({
@@ -925,7 +887,6 @@ function Explorer({ ctx }) {
       }, x.id)),
       jsx('button', { className: 'hermes-fb-tbtn', title: 'New tab', onClick: addTab, children: '+' }),
       jsx('span', { style: { flex: 1 } }),
-      jsx(UpdateChip, { ctx, t }),
       jsx('button', { className: 'hermes-fb-tbtn', title: t('collapse'), onClick: () => { collapsed.set(true); syncPane() }, children: '−' }),
     ] }),
     ...tabs.map(x => jsx(TabPane, {
