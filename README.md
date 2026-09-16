@@ -6,7 +6,12 @@ in tabs (`+` to open, `×` to close). The quick-access sidebar resizes by
 dragging its right edge and collapses with the `«` button (`»` rail to
 bring it back). Sort order, tile size, sidebar width, hidden-file
 toggle, pins, open tabs, and the active tab are all remembered between
-launches.
+launches. The sidebar (pins, Recycle Bin, drives) reorders by dragging
+rows up and down, and remembers the order.
+
+The `☰` button by the tile-size picker switches between the icon grid
+(S/M/L/XL) and a Windows-style details list (Name · Size · Modified ·
+Type, click a header to sort). The choice sticks between launches.
 
 ## Selecting files
 

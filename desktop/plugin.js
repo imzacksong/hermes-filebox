@@ -91,6 +91,13 @@ const EN = {
   deletedOn: 'Deleted',
   copyOutside: 'Copy outside Hermes',
   nothingToPaste: 'Nothing to paste — copy something first.',
+  viewList: 'List view',
+  viewGrid: 'Grid view',
+  cName: 'Name',
+  cSize: 'Size',
+  cModified: 'Modified',
+  cType: 'Type',
+  folder: 'Folder',
 }
 const LOCALES = { en: EN }
 
@@ -155,6 +162,19 @@ const CSS = `
 .hermes-fb-griph:hover{background:var(--chrome-action-hover)}
 .hermes-fb-griph:hover::after{background:var(--ui-accent)}
 .hermes-fb-tile[data-drop=true]{border-color:var(--ui-accent);background:var(--chrome-action-hover)}
+.hermes-fb-list{flex:1;min-height:0;overflow-y:auto;padding:2px 4px;display:flex;flex-direction:column}
+.hermes-fb-lhead,.hermes-fb-lrow{display:grid;grid-template-columns:minmax(0,1fr) 84px 128px 72px;gap:8px;align-items:center;padding:3px 8px;font-size:12px}
+.hermes-fb-lhead{color:var(--ui-text-tertiary);font-size:10px;text-transform:uppercase;letter-spacing:.05em}
+.hermes-fb-lhbtn{background:none;border:0;padding:0;font:inherit;color:inherit;text-transform:inherit;letter-spacing:inherit;cursor:pointer;text-align:left}
+.hermes-fb-lhbtn:hover{color:var(--ui-text-primary)}
+.hermes-fb-lhbtn[data-on=true]{color:var(--ui-accent)}
+.hermes-fb-lrow{border-radius:4px;cursor:pointer;color:var(--ui-text-primary)}
+.hermes-fb-lrow:hover{background:var(--chrome-action-hover)}
+.hermes-fb-lrow[data-on=true]{background:var(--chrome-action-hover)}
+.hermes-fb-lrow[data-drop=true]{outline:1px solid var(--ui-accent)}
+.hermes-fb-lname{display:flex;gap:8px;align-items:center;min-width:0}
+.hermes-fb-lname span:last-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.hermes-fb-lnum{text-align:right;color:var(--ui-text-secondary)}
 `
 
 const CODE_EXTS = new Set(['.py', '.js', '.ts', '.tsx', '.jsx', '.mjs', '.cjs', '.json', '.yaml', '.yml', '.toml', '.md', '.txt', '.log', '.ini', '.cfg', '.css', '.html', '.xml', '.csv', '.ps1', '.bat', '.sh', '.java', '.c', '.cpp', '.h', '.rs', '.go', '.kt', '.sql', '.vue'])
@@ -613,7 +633,7 @@ function dlUrl(path, name) {
   return `${mime}:${name}:${base}/api/plugins/filebox/dl?path=${encodeURIComponent(path)}`
 }
 
-function TabPane({ ctx, tabId, initialCwd, sort, setSort, tilePx, setTilePx, showHidden, setShowHidden, sideWidth, setSideWidth, sideCollapsed, setSideCollapsed, previewH, setPreviewH, hidden }) {
+function TabPane({ ctx, tabId, initialCwd, sort, setSort, tilePx, setTilePx, showHidden, setShowHidden, sideWidth, setSideWidth, sideCollapsed, setSideCollapsed, sideOrder, setSideOrder, previewH, setPreviewH, viewMode, setViewMode, hidden }) {
   const t = usePluginI18n(ID)
   const [cwd, setCwd] = useState(initialCwd || null)
   const [back, setBack] = useState([])
@@ -732,6 +752,29 @@ function TabPane({ ctx, tabId, initialCwd, sort, setSort, tilePx, setTilePx, sho
     setSel(s => (s.length === 1 && s[0] === entry.path) ? [] : [entry.path])
   }
   const pinned = cwd && pinsEffective.includes(cwd)
+  // Sidebar: pins + recycle bin + drives in one draggable list. Order
+  // persists (sideOrder); unknown ids (new pins/drives) append at the end.
+  const sideItems = (() => {
+    const items = [
+      ...pinsEffective.map(p => ({ id: `pin:${p}`, kind: 'pin', path: p })),
+      { id: 'trash:bin', kind: 'trash', path: 'trash://' },
+      ...(roots.data?.drives ?? []).map(d => ({ id: `drive:${d.mount}`, kind: 'drive', path: d.mount, drive: d })),
+    ]
+    if (!Array.isArray(sideOrder)) return items
+    const pos = new Map(sideOrder.map((id, i) => [id, i]))
+    const rank = it => (pos.has(it.id) ? pos.get(it.id) : 1e9)
+    return [...items].sort((a, b) => rank(a) - rank(b))
+  })()
+  const moveSideItem = (fromId, toId) => {
+    if (!fromId || !toId || fromId === toId) return
+    const ids = sideItems.map(x => x.id).filter(id => id !== fromId)
+    const at = ids.indexOf(toId)
+    ids.splice(at < 0 ? ids.length : at, 0, fromId)
+    setSideOrder(ids)
+  }
+  const sideDragStart = id => ev => { try { ev.dataTransfer.setData('application/x-filebox-side', id) } catch {} try { ev.dataTransfer.effectAllowed = 'move' } catch {} }
+  const sideDragOver = ev => { try { if (Array.from(ev.dataTransfer?.types || []).includes('application/x-filebox-side')) ev.preventDefault() } catch {} }
+  const sideDrop = id => ev => { ev.preventDefault(); try { moveSideItem(ev.dataTransfer.getData('application/x-filebox-side'), id) } catch {} }
 
   const togglePin = () => {
     if (!cwd) return
@@ -862,9 +905,56 @@ function TabPane({ ctx, tabId, initialCwd, sort, setSort, tilePx, setTilePx, sho
       const ok = await ctx.os.openExternal(url)
       if (!ok) throw new Error('no handler')
     } catch {
-      try { await ctx.os.revealPath(e.path.replace(/[/\\][^/\\]+$/, '')) } catch { /* noop */ }
+      try { await ctx.os.revealPath(e.path.replace(/[/\\][^/\\]+$/, '') || e.path) } catch { /* noop */ }
     }
   }
+
+  // Shared row gestures for grid tiles AND list rows
+  const rowEvents = (e, idx) => ({
+    onClick: ev => clickSel(e, idx, ev),
+    onContextMenu: () => { if (!sel.includes(e.path)) { anchorRef.current = idx; setSel([e.path]) } },
+    onDragStart: isTrash ? undefined : (ev => {
+      const paths = (sel.includes(e.path) && sel.length) ? sel : [e.path]
+      try { ev.dataTransfer.setData('application/x-filebox-paths', JSON.stringify(paths)) } catch {}
+      try {
+        if (paths.length === 1) {
+          const one = entries.find(x => x.path === paths[0])
+          if (one && !one.is_dir) ev.dataTransfer.setData('DownloadURL', dlUrl(one.path, one.name))
+        }
+      } catch {}
+      ev.dataTransfer.effectAllowed = 'copyMove'
+      if (!sel.includes(e.path)) { anchorRef.current = idx; setSel([e.path]) }
+    }),
+    onDragOver: (e.is_dir && !isTrash) ? (ev => { if (hasFbPaths(ev)) { ev.preventDefault(); ev.dataTransfer.dropEffect = 'move'; setDropPath(e.path) } }) : undefined,
+    onDragLeave: (e.is_dir && !isTrash) ? (ev => { if (!ev.currentTarget.contains(ev.relatedTarget)) setDropPath(cur => cur === e.path ? null : cur) }) : undefined,
+    onDrop: (e.is_dir && !isTrash) ? (ev => { ev.preventDefault(); setDropPath(null); try { dropMove(JSON.parse(ev.dataTransfer.getData('application/x-filebox-paths') || '[]'), e.path) } catch {} }) : undefined,
+    onDoubleClick: isTrash ? undefined : (() => openEntry(e)),
+    onKeyDown: ev => { if (ev.key === 'Enter' && !isTrash) openEntry(e) },
+  })
+  const gridKeys = ev => {
+    const tag = ev.target?.tagName
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
+    if (ev.key === 'Escape') { clearSel(); return }
+    if ((ev.ctrlKey || ev.metaKey) && (ev.key === 'a' || ev.key === 'A')) { ev.preventDefault(); anchorRef.current = null; setSel(shown.map(x => x.path)) }
+  }
+  const menuItems = e => (isVirt(e.path) ? [
+    jsx(ContextMenuItem, { onSelect: () => quickOp('restore', e), children: t('restore') }),
+  ] : [
+    jsx(ContextMenuItem, { onSelect: () => quickOp('open', e), children: t('openFile') }),
+    jsx(ContextMenuItem, { onSelect: () => quickOp('rename', e), children: t('rename') }),
+    jsx(ContextMenuSeparator, {}),
+    jsx(ContextMenuItem, { onSelect: () => quickOp('copy', e), children: t('copy') }),
+    jsx(ContextMenuItem, { onSelect: () => quickOp('cut', e), children: t('cut') }),
+    jsx(ContextMenuItem, { onSelect: () => quickOp('copyout', e), children: t('copyOutside') }),
+    jsx(ContextMenuItem, { onSelect: () => quickOp('paste', e), children: t('paste') }),
+    jsx(ContextMenuSeparator, {}),
+    jsx(ContextMenuItem, { onSelect: () => quickOp('compress', e), children: t('compress') }),
+    e.ext === '.zip' && jsx(ContextMenuItem, { onSelect: () => quickOp('extract', e), children: t('extract') }),
+    jsx(ContextMenuItem, { onSelect: () => quickOp('delete', e), variant: 'destructive', children: t('delete') }),
+    jsx(ContextMenuSeparator, {}),
+    jsx(ContextMenuItem, { onSelect: () => quickOp('copypath', e), children: t('copyPath') }),
+    jsx(ContextMenuItem, { onSelect: () => quickOp('reveal', e), children: t('reveal') }),
+  ])
 
   if (!cwd && home) setCwd(home)
 
@@ -877,24 +967,23 @@ function TabPane({ ctx, tabId, initialCwd, sort, setSort, tilePx, setTilePx, sho
         jsx('div', { className: 'hermes-fb-group', style: { flex: 1 }, children: t('quickAccess') }),
         jsx('button', { className: 'hermes-fb-tbtn', style: { width: 20, height: 20, fontSize: 11 }, title: 'Hide sidebar', onClick: () => setSideCollapsed(true), children: '«' }),
       ] }),
-      ...pinsEffective.map(p => jsx('button', {
-        className: 'hermes-fb-navbtn', 'data-on': p === cwd,
-        onClick: () => nav(p),
-        children: [jsx(Codicon, { name: 'folder' }), jsx('span', { children: p.split(/[/\\]+/).filter(Boolean).pop() || p })],
-      }, `pin:${p}`)),
-      jsx('div', { className: 'hermes-fb-group', children: t('thisPC') }),
-      ...(roots.data?.drives ?? []).map(d => jsxs('div', { children: [
-        jsx('button', {
-          className: 'hermes-fb-navbtn', 'data-on': d.mount === cwd,
-          onClick: () => nav(d.mount),
-          children: [jsx(Codicon, { name: 'device-hard-drive' }), jsx('span', { children: `${d.device} · ${d.total_gb} GB` })],
-        }),
-        jsx('div', { className: 'hermes-fb-drivebar', children: jsx('div', { style: { width: `${d.percent}%` } }) }),
-      ] }, `drive:${d.mount}`)),
-      jsx('button', {
-        className: 'hermes-fb-navbtn', 'data-on': isTrash,
-        onClick: () => nav('trash://'),
-        children: [jsx(Codicon, { name: 'trash' }), jsx('span', { children: t('recycleBin') })],
+      ...sideItems.map(it => {
+        const label = it.kind === 'pin'
+          ? (it.path.split(/[/\\]+/).filter(Boolean).pop() || it.path)
+          : it.kind === 'trash' ? t('recycleBin') : `${it.drive.device} · ${it.drive.total_gb} GB`
+        const icon = it.kind === 'pin' ? 'folder' : it.kind === 'trash' ? 'trash' : 'device-hard-drive'
+        const btn = jsx('button', {
+          className: 'hermes-fb-navbtn', 'data-on': it.path === cwd,
+          draggable: true, onDragStart: sideDragStart(it.id), onDragOver: sideDragOver, onDrop: sideDrop(it.id),
+          onClick: () => nav(it.path),
+          children: [jsx(Codicon, { name: icon }), jsx('span', { children: label })],
+        }, it.id)
+        return it.kind === 'drive'
+          ? jsxs('div', { onDragOver: sideDragOver, onDrop: sideDrop(it.id), children: [
+              btn,
+              jsx('div', { className: 'hermes-fb-drivebar', children: jsx('div', { style: { width: `${it.drive.percent}%` } }) }),
+            ] }, it.id)
+          : btn
       }),
     ] }),
     !sideCollapsed && jsx('div', { className: 'hermes-fb-grip', onMouseDown: startDrag }),
@@ -930,24 +1019,45 @@ function TabPane({ ctx, tabId, initialCwd, sort, setSort, tilePx, setTilePx, sho
           jsx('option', { value: 'mtime', children: t('sortDate') }),
           jsx('option', { value: 'type', children: t('sortType') }),
         ] }),
-        jsx('select', { className: 'hermes-fb-sort', value: tilePx, 'aria-label': 'tile size', onChange: e => setTilePx(Number(e.target.value)), children: [
+        viewMode === 'grid' && jsx('select', { className: 'hermes-fb-sort', value: tilePx, 'aria-label': 'tile size', onChange: e => setTilePx(Number(e.target.value)), children: [
           jsx('option', { value: 64, children: 'S' }),
           jsx('option', { value: 88, children: 'M' }),
           jsx('option', { value: 112, children: 'L' }),
           jsx('option', { value: 144, children: 'XL' }),
         ] }),
+        jsx('button', { className: 'hermes-fb-tbtn', style: { width: 26, height: 22, fontSize: 13 }, title: viewMode === 'grid' ? t('viewList') : t('viewGrid'), onClick: () => setViewMode(viewMode === 'grid' ? 'list' : 'grid'), children: viewMode === 'grid' ? '☰' : '▦' }),
       ] }),
       mkdirMode && !isTrash && jsxs('div', { className: 'hermes-fb-mkdir', children: [
         jsx('input', { value: mkdirName, placeholder: t('newFolder'), onChange: e => setMkdirName(e.target.value), onKeyDown: e => { if (e.key === 'Enter') doMkdir() } }),
         jsx(Button, { size: 'micro', onClick: doMkdir, children: t('create') }),
         jsx(Button, { size: 'micro', variant: 'ghost', onClick: () => { setMkdirMode(false); setMkdirName('') }, children: t('cancel') }),
       ] }),
-      jsxs('div', { className: 'hermes-fb-grid', style: { gridTemplateColumns: `repeat(auto-fill,minmax(${tilePx + 16}px,1fr))` }, onDragOver: ev => { if (hasFbPaths(ev)) ev.preventDefault() }, onKeyDown: ev => {
-        const tag = ev.target?.tagName
-        if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
-        if (ev.key === 'Escape') { clearSel(); return }
-        if ((ev.ctrlKey || ev.metaKey) && (ev.key === 'a' || ev.key === 'A')) { ev.preventDefault(); anchorRef.current = null; setSel(shown.map(x => x.path)) }
-      }, onDrop: ev => {
+      viewMode === 'list' ? jsxs('div', { className: 'hermes-fb-list', onKeyDown: gridKeys, children: [
+        jsxs('div', { className: 'hermes-fb-lhead', children: [
+          jsx('button', { className: 'hermes-fb-lhbtn', 'data-on': sort === 'name', onClick: () => setSort('name'), children: t('cName') }),
+          jsx('button', { className: 'hermes-fb-lhbtn', 'data-on': sort === 'size', onClick: () => setSort('size'), children: t('cSize') }),
+          jsx('button', { className: 'hermes-fb-lhbtn', 'data-on': sort === 'mtime', onClick: () => setSort('mtime'), children: t('cModified') }),
+          jsx('button', { className: 'hermes-fb-lhbtn', 'data-on': sort === 'type', onClick: () => setSort('type'), children: t('cType') }),
+        ] }),
+        list.isFetching && !list.data && jsx(GlyphSpinner, { ariaLabel: t('explorer') }),
+        list.isError && jsx('div', { className: 'hermes-fb-error', role: 'status', children: t('backendDown') }),
+        ...shown.map((e, idx) => jsx(ContextMenu, { children: [
+          jsx(ContextMenuTrigger, { asChild: true, children: jsxs('div', {
+            className: 'hermes-fb-lrow', 'data-on': sel.includes(e.path), 'data-dir': e.is_dir,
+            'data-drop': dropPath === e.path, role: 'button', tabIndex: 0,
+            draggable: !isTrash,
+            ...rowEvents(e, idx),
+            'aria-label': e.name,
+            children: [
+              jsxs('span', { className: 'hermes-fb-lname', children: [jsx(Codicon, { name: e.is_dir ? 'folder' : iconFor(category(e)), size: 14 }), jsx('span', { children: e.name })] }),
+              jsx('span', { className: 'hermes-fb-lnum', children: e.is_dir ? '—' : fmtSize(e.size) }),
+              jsx('span', { children: fmtDate(e.mtime) }),
+              jsx('span', { children: e.is_dir ? t('folder') : (e.ext ? e.ext.replace(/^\./, '').toUpperCase() : '—') }),
+            ],
+          }) }),
+          jsx(ContextMenuContent, { children: menuItems(e) }),
+        ] }, e.path)),
+      ] }) : jsxs('div', { className: 'hermes-fb-grid', style: { gridTemplateColumns: `repeat(auto-fill,minmax(${tilePx + 16}px,1fr))` }, onDragOver: ev => { if (hasFbPaths(ev)) ev.preventDefault() }, onKeyDown: gridKeys, onDrop: ev => {
         if (isTrash) return
         if (ev.target?.closest && ev.target.closest('[data-dir="true"]')) return
         ev.preventDefault()
@@ -963,27 +1073,7 @@ function TabPane({ ctx, tabId, initialCwd, sort, setSort, tilePx, setTilePx, sho
             className: 'hermes-fb-tile', 'data-on': sel.includes(e.path), 'data-dir': e.is_dir,
             'data-drop': dropPath === e.path,
             draggable: !isTrash,
-            onDragStart: isTrash ? undefined : (ev => {
-              const paths = (sel.includes(e.path) && sel.length) ? sel : [e.path]
-              try { ev.dataTransfer.setData('application/x-filebox-paths', JSON.stringify(paths)) } catch {}
-              // Drag OUT to Explorer/desktop: DownloadURL flavor (single files).
-              // Folders can't ride it — compress first.
-              try {
-                if (paths.length === 1) {
-                  const one = entries.find(x => x.path === paths[0])
-                  if (one && !one.is_dir) ev.dataTransfer.setData('DownloadURL', dlUrl(one.path, one.name))
-                }
-              } catch {}
-              ev.dataTransfer.effectAllowed = 'copyMove'
-              if (!sel.includes(e.path)) { anchorRef.current = idx; setSel([e.path]) }
-            }),
-            onDragOver: (e.is_dir && !isTrash) ? (ev => { if (hasFbPaths(ev)) { ev.preventDefault(); ev.dataTransfer.dropEffect = 'move'; setDropPath(e.path) } }) : undefined,
-            onDragLeave: (e.is_dir && !isTrash) ? (ev => { if (!ev.currentTarget.contains(ev.relatedTarget)) setDropPath(cur => cur === e.path ? null : cur) }) : undefined,
-            onDrop: (e.is_dir && !isTrash) ? (ev => { ev.preventDefault(); setDropPath(null); try { dropMove(JSON.parse(ev.dataTransfer.getData('application/x-filebox-paths') || '[]'), e.path) } catch {} }) : undefined,
-            onClick: ev => clickSel(e, idx, ev),
-            onContextMenu: () => { if (!sel.includes(e.path)) { anchorRef.current = idx; setSel([e.path]) } },
-            onDoubleClick: isTrash ? undefined : (() => openEntry(e)),
-            onKeyDown: ev => { if (ev.key === 'Enter' && !isTrash) openEntry(e) },
+            ...rowEvents(e, idx),
             'aria-label': e.name,
             children: [
               jsx(Thumb, { ctx, entry: e, px: iconPx, fallback: jsx('span', { className: 'hermes-fb-tileicon', children: jsx(Codicon, { name: iconFor(cat), size: iconPx }) }) }),
@@ -991,24 +1081,7 @@ function TabPane({ ctx, tabId, initialCwd, sort, setSort, tilePx, setTilePx, sho
               jsx('span', { className: 'hermes-fb-tilesub', children: e.is_dir ? '—' : fmtSize(e.size) }),
             ],
           }) }),
-          jsx(ContextMenuContent, { children: isVirt(e.path) ? [
-            jsx(ContextMenuItem, { onSelect: () => quickOp('restore', e), children: t('restore') }),
-          ] : [
-            jsx(ContextMenuItem, { onSelect: () => quickOp('open', e), children: t('openFile') }),
-            jsx(ContextMenuItem, { onSelect: () => quickOp('rename', e), children: t('rename') }),
-            jsx(ContextMenuSeparator, {}),
-            jsx(ContextMenuItem, { onSelect: () => quickOp('copy', e), children: t('copy') }),
-            jsx(ContextMenuItem, { onSelect: () => quickOp('cut', e), children: t('cut') }),
-            jsx(ContextMenuItem, { onSelect: () => quickOp('copyout', e), children: t('copyOutside') }),
-            jsx(ContextMenuItem, { onSelect: () => quickOp('paste', e), children: t('paste') }),
-            jsx(ContextMenuSeparator, {}),
-            jsx(ContextMenuItem, { onSelect: () => quickOp('compress', e), children: t('compress') }),
-            e.ext === '.zip' && jsx(ContextMenuItem, { onSelect: () => quickOp('extract', e), children: t('extract') }),
-            jsx(ContextMenuItem, { onSelect: () => quickOp('delete', e), variant: 'destructive', children: t('delete') }),
-            jsx(ContextMenuSeparator, {}),
-            jsx(ContextMenuItem, { onSelect: () => quickOp('copypath', e), children: t('copyPath') }),
-            jsx(ContextMenuItem, { onSelect: () => quickOp('reveal', e), children: t('reveal') }),
-          ] }),
+          jsx(ContextMenuContent, { children: menuItems(e) }),
         ] }, e.path)
         }),
       ] }),
@@ -1022,7 +1095,7 @@ function TabPane({ ctx, tabId, initialCwd, sort, setSort, tilePx, setTilePx, sho
         jsx('button', { className: 'hermes-fb-tbtn', style: { width: 'auto', fontSize: 11 }, onClick: () => setShowHidden(!showHidden), children: showHidden ? '✓ hidden' : 'hidden' }),
       ] }),
       selEntry && jsxs('div', { className: 'hermes-fb-pvwrap', style: { height: previewH }, children: [
-        jsx('div', { className: 'hermes-fb-griph', title: t('dragResize'), onMouseDown: startPreviewDrag }),
+        jsx('div', { className: 'hermes-fb-griph', title: t('dragResize'), onPointerDown: startPreviewDrag }),
         jsx(Preview, { ctx, t, entry: selEntry, refetch: () => list.refetch(), select: selectProp }, selEntry.path),
       ] }),
       selEntries.length > 1 && jsx(MultiPanel, { ctx, t, entries: selEntries, cwd, clearSel, refresh: () => { list.refetch(); dirBump.set(dirBump.get() + 1) } }),
@@ -1088,8 +1161,12 @@ function Explorer({ ctx }) {
   const setSideWidth = v => { const n = Number(v) || 148; setSideWidthState(n); try { ctx.storage.set('sideWidth', n) } catch {} }
   const [sideCollapsed, setSideCollapsedState] = useState(() => ctx.storage.get('sideCollapsed', false) === true)
   const setSideCollapsed = v => { setSideCollapsedState(v); try { ctx.storage.set('sideCollapsed', v) } catch {} }
+  const [sideOrder, setSideOrderState] = useState(() => { try { const o = ctx.storage.get('sideOrder', null); return Array.isArray(o) ? o : null } catch { return null } })
+  const setSideOrder = v => { setSideOrderState(v); try { ctx.storage.set('sideOrder', v) } catch {} }
   const [previewH, setPreviewHState] = useState(() => Number(ctx.storage.get('previewH', 280)) || 280)
   const setPreviewH = v => { const n = Number(v) || 280; setPreviewHState(n); try { ctx.storage.set('previewH', n) } catch {} }
+  const [viewMode, setViewModeState] = useState(() => ctx.storage.get('viewMode', 'grid'))
+  const setViewMode = v => { setViewModeState(v); try { ctx.storage.set('viewMode', v) } catch {} }
   const [tabs, setTabsState] = useState(() => {
     try {
       const saved = ctx.storage.get('tabs', null)
@@ -1141,7 +1218,8 @@ function Explorer({ ctx }) {
     ] }),
     ...tabs.map(x => jsx(TabPane, {
       ctx, tabId: x.id, initialCwd: x.cwd, sort, setSort, tilePx, setTilePx, showHidden, setShowHidden,
-      sideWidth, setSideWidth, sideCollapsed, setSideCollapsed, previewH, setPreviewH,
+      sideWidth, setSideWidth, sideCollapsed, setSideCollapsed, sideOrder, setSideOrder,
+      previewH, setPreviewH, viewMode, setViewMode,
       hidden: x.id !== active.id,
     }, x.id)),
   ] })
