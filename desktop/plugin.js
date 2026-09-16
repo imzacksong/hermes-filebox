@@ -91,6 +91,8 @@ const EN = {
   deletedOn: 'Deleted',
   copyOutside: 'Copy outside Hermes',
   nothingToPaste: 'Nothing to paste — copy something first.',
+  aheadV: v => `Unpushed v${v}`,
+  aheadTip: (l, r) => `Local v${l} is ahead of GitHub v${r} — push to publish it. Click to re-check.`,
   viewList: 'List view',
   viewGrid: 'Grid view',
   cName: 'Name',
@@ -1118,6 +1120,7 @@ function UpdateChip({ ctx, t }) {
       const r = await ctx.rest('/update-check', { method: 'POST', timeoutMs: 20000, body: { force: !!force } })
       if (!r?.ok) setSt({ phase: 'error', local: r?.local || '', remote: '', msg: r?.error || 'check failed' })
       else if (r.behind) setSt({ phase: 'behind', local: r.local, remote: r.remote, msg: '' })
+      else if (r.ahead) setSt({ phase: 'ahead', local: r.local, remote: r.remote, msg: '' })
       else setSt({ phase: 'current', local: r.local, remote: r.remote, msg: '' })
     } catch (e) {
       setSt({ phase: 'error', local: '', remote: '', msg: String((e && e.message) || e).slice(0, 80) })
@@ -1135,6 +1138,7 @@ function UpdateChip({ ctx, t }) {
   }
   useEffect(() => { check(false) }, [])
   if (st.phase === 'behind') return jsx(Button, { size: 'micro', onClick: doUpdate, title: `v${st.local} installed — click to update`, children: `Update Now → v${st.remote}` })
+  if (st.phase === 'ahead') return jsx(Button, { size: 'micro', variant: 'ghost', title: t('aheadTip', st.local, st.remote), onClick: () => check(true), children: t('aheadV', st.local) })
   if (st.phase === 'updating') return jsx(Button, { size: 'micro', disabled: true, children: jsxs('span', { style: { display: 'inline-flex', alignItems: 'center', gap: 4 }, children: [jsx(GlyphSpinner, { ariaLabel: t('checkingUpdate') }), 'Updating…'] }) })
   if (st.phase === 'done') return jsx(Button, { size: 'micro', variant: 'ghost', title: t('updateDone'), onClick: () => check(true), children: `v${st.local} · reload to apply` })
   if (st.phase === 'error') return jsx(Button, { size: 'micro', variant: 'ghost', title: `${st.msg} — click to retry`, onClick: () => check(true), children: 'Retry' })

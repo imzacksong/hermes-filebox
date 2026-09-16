@@ -57,7 +57,9 @@ def strip_frontend() -> None:
     for line in ("  updateTo: v => `Update to v${v}`,\n",
                  "  checkingUpdate: 'Checking for updates…',\n",
                  "  upToDate: v => `v${v} · up to date`,\n",
-                 "  updateDone: 'Updated — restart the gateway and reload the window to apply.',\n"):
+                 "  updateDone: 'Updated — restart the gateway and reload the window to apply.',\n",
+                 "  aheadV: v => `Unpushed v${v}`,\n",
+                 "  aheadTip: (l, r) => `Local v${l} is ahead of GitHub v${r} — push to publish it. Click to re-check.`,\n"):
         assert line in src, line
         src = src.replace(line, "")
     FRONTEND.write_text(src, encoding="utf-8")

@@ -678,6 +678,19 @@ def update_check(body: UpdateCheckIn) -> Dict[str, Any]:
     if (not body.force and cached.get("remote")
             and (time.time() - float(cached.get("at", 0)) < UPDATE_CHECK_TTL)):
         remote = cached["remote"]
+        # A stale cache can fake "ahead" right after a push (local bumped,
+        # remote cached old). Revalidate live before reporting ahead.
+        if _cmp_ver(local, remote) > 0:
+            live = _remote_version()
+            if live is not None:
+                remote = live
+                try:
+                    UPDATE_STATE_FILE.write_text(
+                        json.dumps({"at": time.time(), "local": local,
+                                    "remote": remote}),
+                        encoding="utf-8")
+                except Exception:
+                    pass
     else:
         remote = _remote_version()
         if remote is None:
@@ -693,6 +706,7 @@ def update_check(body: UpdateCheckIn) -> Dict[str, Any]:
             pass
     return {"ok": True, "local": local, "remote": remote,
             "behind": _cmp_ver(remote, local) > 0,
+            "ahead": _cmp_ver(local, remote) > 0,
             "repo": UPDATE_REPO, "branch": UPDATE_BRANCH}
 
 
