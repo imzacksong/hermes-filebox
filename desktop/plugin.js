@@ -55,6 +55,7 @@ const EN = {
   sortBy: 'Sort',
   sortName: 'Name', sortSize: 'Size', sortDate: 'Modified', sortType: 'Type',
   preview: 'Preview', details: 'Details',
+  closePreview: 'Close preview',
   collapse: 'Collapse panel', expand: 'Expand panel',
   binaryFile: 'Binary file — no text preview.',
   mediaBlocked: 'Preview blocked here — use Open instead.',
@@ -122,6 +123,10 @@ const CSS = `
 .hermes-fb-grip:hover{background:var(--ui-accent)}
 .hermes-fb-rail{width:26px;flex-shrink:0;display:flex;flex-direction:column;align-items:center;padding-top:6px;border-right:1px solid var(--ui-stroke-secondary)}
 .hermes-fb-opsbar{display:flex;gap:4px;flex-wrap:wrap;align-items:center;padding:6px 8px;border-bottom:1px solid var(--ui-stroke-secondary)}
+.hermes-fb-pvwrap{display:flex;flex-direction:column;flex-shrink:0;min-height:0;border-top:1px solid var(--ui-stroke-secondary)}
+.hermes-fb-pvwrap .hermes-fb-preview{border-top:0;flex:1;min-height:0;max-height:none}
+.hermes-fb-griph{height:6px;cursor:row-resize;flex-shrink:0}
+.hermes-fb-griph:hover{background:var(--ui-accent)}
 `
 
 const CODE_EXTS = new Set(['.py', '.js', '.ts', '.tsx', '.jsx', '.mjs', '.cjs', '.json', '.yaml', '.yml', '.toml', '.md', '.txt', '.log', '.ini', '.cfg', '.css', '.html', '.xml', '.csv', '.ps1', '.bat', '.sh', '.java', '.c', '.cpp', '.h', '.rs', '.go', '.kt', '.sql', '.vue'])
@@ -339,6 +344,8 @@ function Preview({ ctx, t, entry, refetch, select }) {
       jsx(Button, { size: 'micro', variant: 'ghost', onClick: doDelete, disabled: opBusy, children: confirmDel ? t('confirmDelete') : t('delete') }),
       jsx(Button, { size: 'micro', variant: 'ghost', onClick: doZip, disabled: opBusy, children: t('compress') }),
       entry.ext === '.zip' && jsx(Button, { size: 'micro', variant: 'ghost', onClick: doExtract, disabled: opBusy, children: t('extract') }),
+      jsx('span', { style: { flex: 1 } }),
+      jsx('button', { className: 'hermes-fb-tbtn', style: { width: 20, height: 20, fontSize: 12 }, title: t('closePreview'), onClick: () => select(null), children: '×' }),
     ] }),
     jsxs('div', { className: 'hermes-fb-kv', children: [jsx('span', { children: t('details') }), jsx('b', { children: entry.name })] }),
     jsxs('div', { className: 'hermes-fb-kv', children: [jsx('span', { children: 'Size' }), jsx('b', { children: entry.is_dir ? '—' : fmtSize(entry.size) })] }),
@@ -385,7 +392,7 @@ function hostNotify(ctx, message) {
   } catch { /* noop */ }
 }
 
-function TabPane({ ctx, tabId, initialCwd, sort, setSort, tilePx, setTilePx, showHidden, setShowHidden, sideWidth, setSideWidth, sideCollapsed, setSideCollapsed, hidden }) {
+function TabPane({ ctx, tabId, initialCwd, sort, setSort, tilePx, setTilePx, showHidden, setShowHidden, sideWidth, setSideWidth, sideCollapsed, setSideCollapsed, previewH, setPreviewH, hidden }) {
   const t = usePluginI18n(ID)
   const [cwd, setCwd] = useState(initialCwd || null)
   const [back, setBack] = useState([])
@@ -519,6 +526,16 @@ function TabPane({ ctx, tabId, initialCwd, sort, setSort, tilePx, setTilePx, sho
     } catch (e) { hostNotify(ctx, String((e && e.message) || e)) }
   }
 
+  const startPreviewDrag = e => {
+    e.preventDefault()
+    const y0 = e.clientY
+    const h0 = previewH
+    const move = ev => setPreviewH(Math.min(640, Math.max(140, Math.round(h0 + (y0 - ev.clientY)))))
+    const up = () => { window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up) }
+    window.addEventListener('mousemove', move)
+    window.addEventListener('mouseup', up)
+  }
+
   const openEntry = async e => {
     if (e.is_dir) { nav(e.path); return }
     const url = `file:///${e.path.replace(/\\/g, '/')}`
@@ -646,7 +663,10 @@ function TabPane({ ctx, tabId, initialCwd, sort, setSort, tilePx, setTilePx, sho
         jsx('button', { className: 'hermes-fb-tbtn', style: { width: 'auto', fontSize: 11 }, onClick: () => setMkdirMode(!mkdirMode), children: `+ ${t('newFolder')}` }),
         jsx('button', { className: 'hermes-fb-tbtn', style: { width: 'auto', fontSize: 11 }, onClick: () => setShowHidden(!showHidden), children: showHidden ? '✓ hidden' : 'hidden' }),
       ] }),
-      selEntry && jsx(Preview, { ctx, t, entry: selEntry, refetch: () => list.refetch(), select: setSelected }, selEntry.path),
+      selEntry && jsxs('div', { className: 'hermes-fb-pvwrap', style: { height: previewH }, children: [
+        jsx('div', { className: 'hermes-fb-griph', onMouseDown: startPreviewDrag }),
+        jsx(Preview, { ctx, t, entry: selEntry, refetch: () => list.refetch(), select: setSelected }, selEntry.path),
+      ] }),
     ] }),
   ] })
 }
@@ -676,6 +696,8 @@ function Explorer({ ctx }) {
   const setSideWidth = v => { const n = Number(v) || 148; setSideWidthState(n); try { ctx.storage.set('sideWidth', n) } catch {} }
   const [sideCollapsed, setSideCollapsedState] = useState(() => ctx.storage.get('sideCollapsed', false) === true)
   const setSideCollapsed = v => { setSideCollapsedState(v); try { ctx.storage.set('sideCollapsed', v) } catch {} }
+  const [previewH, setPreviewHState] = useState(() => Number(ctx.storage.get('previewH', 280)) || 280)
+  const setPreviewH = v => { const n = Number(v) || 280; setPreviewHState(n); try { ctx.storage.set('previewH', n) } catch {} }
   const [tabs, setTabsState] = useState(() => {
     try {
       const saved = ctx.storage.get('tabs', null)
@@ -726,7 +748,7 @@ function Explorer({ ctx }) {
     ] }),
     ...tabs.map(x => jsx(TabPane, {
       ctx, tabId: x.id, initialCwd: x.cwd, sort, setSort, tilePx, setTilePx, showHidden, setShowHidden,
-      sideWidth, setSideWidth, sideCollapsed, setSideCollapsed,
+      sideWidth, setSideWidth, sideCollapsed, setSideCollapsed, previewH, setPreviewH,
       hidden: x.id !== active.id,
     }, x.id)),
   ] })

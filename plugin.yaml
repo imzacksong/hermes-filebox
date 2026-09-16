@@ -1,4 +1,4 @@
 name: filebox
-version: 1.4.0
-description: "Windows-Explorer-style file browser pane: tabs, resizable sidebar, rename/copy/move/delete/zip, right-click menu, previews, LAN sharing."
+version: 1.5.0
+description: "Windows-Explorer-style file browser pane: tabs, resizable sidebar + preview, rename/copy/move/delete/zip, right-click menu, LAN sharing."
 author: "Tala + Zack"

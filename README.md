@@ -62,7 +62,9 @@ Select anything and the preview panel grows an ops bar up top: **Copy path**,
 **Rename** (inline, Enter to save), **Copy** / **Cut** / **Paste**,
 **Delete** (second click confirms), **Compress**, and **Extract here** on
 zips. Right-click any tile for the same ops in a context menu (paste targets
-the folder you clicked, or the current folder). The bottom row stays lean:
+the folder you clicked, or the current folder). The preview panel resizes by
+dragging its top edge and closes with the `×` in the ops bar (clicking the
+file again still toggles it). The bottom row stays lean:
 Open, Send, Show in Explorer.
 auto-resolve (`file (2).txt`). Deletes are permanent (no recycle bin) and
 drive roots are refused — you can't nuke `C:\` from here.
