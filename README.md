@@ -58,10 +58,12 @@ needs nothing.
 
 ## Editing files
 
-Select anything to get **Rename** (inline, Enter to save), **Copy** / **Cut**,
-then **Paste** from the toolbar of the destination tab — the clipboard works
-across tabs. **Delete** asks for a second confirming click. **Compress** zips
-the selection next to itself; zips offer **Extract here**. Name collisions
+Select anything and the preview panel grows an ops bar up top: **Copy path**,
+**Rename** (inline, Enter to save), **Copy** / **Cut** / **Paste**,
+**Delete** (second click confirms), **Compress**, and **Extract here** on
+zips. Right-click any tile for the same ops in a context menu (paste targets
+the folder you clicked, or the current folder). The bottom row stays lean:
+Open, Send, Show in Explorer.
 auto-resolve (`file (2).txt`). Deletes are permanent (no recycle bin) and
 drive roots are refused — you can't nuke `C:\` from here.
 
