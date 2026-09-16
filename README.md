@@ -48,18 +48,7 @@ go to the bin, never vanish.
    the **FileBox** chip bottom-right. Drag it to the right side and close the
    built-in files pane if you want it as your sidebar.
 
-## Self-updates
-
-The tab strip shows the installed version. FileBox checks
-`imzacksong/hermes-filebox` on GitHub at most once a day (one small
-version-file fetch, cached in `.update-check.json` next to the plugin).
-When a newer version is published the chip becomes an **Update to v…**
-button: one click downloads the release tarball and overlays
-`plugin.yaml`, `dashboard/`, `desktop/`, and `README.md` onto your
-install, then tells you to restart the gateway and reload the window
-(Ctrl+K → Reload) to apply. Click the version chip any time to force a
-fresh check. Override repo/branch with the `FILEBOX_UPDATE_REPO` /
-`FILEBOX_UPDATE_BRANCH` env vars.
+.
 
 ## Editing files
 

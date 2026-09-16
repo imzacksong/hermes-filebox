@@ -74,10 +74,6 @@ const EN = {
   resetView: 'Reset view',
   readFull: 'Read full file',
   showLess: 'Show less',
-  updateTo: v => `Update to v${v}`,
-  checkingUpdate: 'Checking for updates…',
-  upToDate: v => `v${v} · up to date`,
-  updateDone: 'Updated — restart the gateway and reload the window to apply.',
   selectedN: (n, size) => `${n} selected · ${size}`,
   clear: 'Clear selection',
   dragResize: 'Drag to resize',
@@ -91,8 +87,6 @@ const EN = {
   deletedOn: 'Deleted',
   copyOutside: 'Copy outside Hermes',
   nothingToPaste: 'Nothing to paste — copy something first.',
-  aheadV: v => `Unpushed v${v}`,
-  aheadTip: (l, r) => `Local v${l} is ahead of GitHub v${r} — push to publish it. Click to re-check.`,
   viewList: 'List view',
   viewGrid: 'Grid view',
   cName: 'Name',
@@ -1109,41 +1103,6 @@ function tabName(cwd) {
   if (!cwd) return 'Home'
   const parts = String(cwd).split(/[/\\]+/).filter(Boolean)
   return parts.pop() || cwd
-}
-
-function UpdateChip({ ctx, t }) {
-  const [st, setSt] = useState({ phase: 'idle', local: '', remote: '', msg: '' })
-  const check = async force => {
-    if (st.phase === 'checking' || st.phase === 'updating') return
-    setSt(s => ({ ...s, phase: 'checking' }))
-    try {
-      const r = await ctx.rest('/update-check', { method: 'POST', timeoutMs: 20000, body: { force: !!force } })
-      if (!r?.ok) setSt({ phase: 'error', local: r?.local || '', remote: '', msg: r?.error || 'check failed' })
-      else if (r.behind) setSt({ phase: 'behind', local: r.local, remote: r.remote, msg: '' })
-      else if (r.ahead) setSt({ phase: 'ahead', local: r.local, remote: r.remote, msg: '' })
-      else setSt({ phase: 'current', local: r.local, remote: r.remote, msg: '' })
-    } catch (e) {
-      setSt({ phase: 'error', local: '', remote: '', msg: String((e && e.message) || e).slice(0, 80) })
-    }
-  }
-  const doUpdate = async () => {
-    setSt(s => ({ ...s, phase: 'updating' }))
-    try {
-      const r = await ctx.rest('/update', { method: 'POST', timeoutMs: 180000, body: {} })
-      if (r?.ok) setSt({ phase: 'done', local: r.version || '', remote: '', msg: '' })
-      else setSt({ phase: 'error', local: '', remote: '', msg: String(r?.error || 'update failed').slice(0, 80) })
-    } catch (e) {
-      setSt({ phase: 'error', local: '', remote: '', msg: String((e && e.message) || e).slice(0, 80) })
-    }
-  }
-  useEffect(() => { check(false) }, [])
-  if (st.phase === 'behind') return jsx(Button, { size: 'micro', onClick: doUpdate, title: `v${st.local} installed — click to update`, children: `Update Now → v${st.remote}` })
-  if (st.phase === 'ahead') return jsx(Button, { size: 'micro', variant: 'ghost', title: t('aheadTip', st.local, st.remote), onClick: () => check(true), children: t('aheadV', st.local) })
-  if (st.phase === 'updating') return jsx(Button, { size: 'micro', disabled: true, children: jsxs('span', { style: { display: 'inline-flex', alignItems: 'center', gap: 4 }, children: [jsx(GlyphSpinner, { ariaLabel: t('checkingUpdate') }), 'Updating…'] }) })
-  if (st.phase === 'done') return jsx(Button, { size: 'micro', variant: 'ghost', title: t('updateDone'), onClick: () => check(true), children: `v${st.local} · reload to apply` })
-  if (st.phase === 'error') return jsx(Button, { size: 'micro', variant: 'ghost', title: `${st.msg} — click to retry`, onClick: () => check(true), children: 'Retry' })
-  if (st.phase === 'current') return jsx(Button, { size: 'micro', variant: 'ghost', title: t('upToDate', st.local), onClick: () => check(true), children: 'Up To Date' })
-  return jsx(Button, { size: 'micro', variant: 'ghost', disabled: true, title: t('checkingUpdate'), children: 'Checking…' })
 }
 
 function Explorer({ ctx }) {
