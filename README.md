@@ -13,7 +13,7 @@ paired Hermes agent over the peer mesh.
 ## Install
 
 ```sh
-git clone https://github.com/OWNER/hermes-filebox.git
+git clone https://github.com/imzacksong/hermes-filebox.git
 cp -r hermes-filebox ~/.hermes/plugins/filebox   # Windows: %LOCALAPPDATA%\hermes\plugins\filebox
 ```
 
