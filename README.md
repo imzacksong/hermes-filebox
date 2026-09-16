@@ -69,6 +69,14 @@ Open, Send, Show in Explorer.
 auto-resolve (`file (2).txt`). Deletes are permanent (no recycle bin) and
 drive roots are refused — you can't nuke `C:\` from here.
 
+## Rich tiles & 3D
+
+Video files get real frame thumbnails (ffmpeg grabs a frame ~10% in — needs
+`ffmpeg`/`ffprobe` on PATH or video tiles fall back to icons). `.stl` and
+`.obj` files get rendered 3D thumbnails, and opening one drops an interactive
+viewer into the preview: drag to rotate, `+`/`−` to zoom, Reset view. Models
+over ~96MB skip preview (Open them instead).
+
 ## Notes
 
 - Media/PDF previews load straight from disk; if a preview ever shows

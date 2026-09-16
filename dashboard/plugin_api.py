@@ -29,6 +29,8 @@ from pydantic import BaseModel
 router = APIRouter()
 
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".ico", ".tif", ".tiff"}
+VIDEO_EXTS = {".mp4", ".mkv", ".avi", ".mov", ".wmv", ".webm", ".m4v", ".ts"}
+MODEL_EXTS = {".stl", ".obj"}
 MAX_LIST = 8000
 READ_CAP_KB = 256
 THUMB_SRC_CAP_MB = 25
@@ -47,6 +49,193 @@ class ReadIn(BaseModel):
 class ThumbIn(BaseModel):
     path: str = ""
     size: int = 256
+
+
+class MediaIn(BaseModel):
+    path: str = ""
+    size: int = 256
+
+
+@router.post("/videothumb")
+def videothumb(body: MediaIn) -> JSONResponse:
+    if Path(body.path).suffix.lower() not in VIDEO_EXTS:
+        return JSONResponse({"error": "not a video"}, status_code=400)
+    ff = shutil.which("ffmpeg")
+    if not ff:
+        return JSONResponse({"error": "ffmpeg missing"}, status_code=501)
+    size = max(32, min(body.size, 512))
+    t = 1.0
+    fp = shutil.which("ffprobe")
+    if fp:
+        try:
+            out = subprocess.run(
+                [fp, "-v", "error", "-show_entries", "format=duration",
+                 "-of", "csv=p=0", body.path],
+                capture_output=True, text=True, timeout=15)
+            dur = float((out.stdout or "").strip())
+            t = min(5.0, max(0.5, dur * 0.1))
+        except Exception:
+            pass
+    try:
+        out = subprocess.run(
+            [ff, "-hide_banner", "-loglevel", "error", "-ss", str(t),
+             "-i", body.path, "-frames:v", "1", "-vf", f"scale={size}:-1",
+             "-q:v", "5", "-f", "mjpeg", "-"],
+            capture_output=True, timeout=30)
+        if out.returncode != 0 or not out.stdout:
+            return JSONResponse({"error": "no frame"}, status_code=422)
+        b64 = base64.b64encode(out.stdout).decode("ascii")
+        return JSONResponse({"data_url": f"data:image/jpeg;base64,{b64}"})
+    except subprocess.TimeoutExpired:
+        return JSONResponse({"error": "timed out"}, status_code=504)
+    except Exception as e:
+        return JSONResponse({"error": str(e)[:200]}, status_code=500)
+
+
+class RawIn(BaseModel):
+    path: str = ""
+    max_mb: int = 48
+
+
+@router.post("/raw")
+def raw_bytes(body: RawIn) -> JSONResponse:
+    try:
+        cap = max(1, min(body.max_mb, 96)) * 1024 * 1024
+        with open(body.path, "rb") as f:
+            raw = f.read(cap + 1)
+        truncated = len(raw) > cap
+        raw = raw[:cap]
+        return JSONResponse({
+            "b64": base64.b64encode(raw).decode("ascii"),
+            "size": len(raw), "truncated": truncated})
+    except FileNotFoundError:
+        return JSONResponse({"error": "not found"}, status_code=404)
+    except PermissionError:
+        return JSONResponse({"error": "access denied"}, status_code=403)
+    except Exception as e:
+        return JSONResponse({"error": str(e)[:200]}, status_code=500)
+
+
+def _stl_facets(path: str, cap: int = 4000):
+    """Return (m,3,3) float array of triangles, sampled down to cap. Needs numpy."""
+    import numpy as np
+    with open(path, "rb") as f:
+        buf = f.read()
+    tris = None
+    if len(buf) > 84:
+        import struct
+        (count,) = struct.unpack("<I", buf[80:84])
+        if 0 < count < 5000000 and 84 + count * 50 == len(buf):
+            dt = np.dtype([("n", "<f4", 3), ("v", "<f4", 9), ("a", "<u2")])
+            arr = np.frombuffer(buf[84:84 + count * 50], dtype=dt)
+            tris = arr["v"].reshape(-1, 3, 3).astype(np.float64)
+    if tris is None:
+        text = buf[:32 * 1024 * 1024].decode("utf-8", errors="ignore")
+        verts = []
+        for line in text.splitlines():
+            s = line.strip()
+            if s.startswith("vertex"):
+                try:
+                    verts.append([float(x) for x in s.split()[1:4]])
+                except ValueError:
+                    pass
+                if len(verts) >= cap * 3:
+                    break
+        if len(verts) < 3:
+            return None
+        tris = np.array(verts[:len(verts) // 3 * 3], dtype=np.float64).reshape(-1, 3, 3)
+    if len(tris) > cap:
+        tris = tris[:: (len(tris) + cap - 1) // cap]
+    return tris
+
+
+def _obj_facets(path: str, cap: int = 4000):
+    import numpy as np
+    verts: List[List[float]] = []
+    faces: List[List[int]] = []
+    with open(path, "r", encoding="utf-8", errors="ignore") as f:
+        for i, line in enumerate(f):
+            if i > 2000000:
+                break
+            if line.startswith("v "):
+                try:
+                    verts.append([float(x) for x in line.split()[1:4]])
+                except ValueError:
+                    pass
+            elif line.startswith("f "):
+                try:
+                    idx = [int(p.split("/")[0]) - 1 for p in line.split()[1:]]
+                    if len(idx) >= 3:
+                        for k in range(1, len(idx) - 1):
+                            faces.append([idx[0], idx[k], idx[k + 1]])
+                except ValueError:
+                    pass
+                if len(faces) >= cap:
+                    break
+    if not faces or not verts:
+        return None
+    v = np.array(verts, dtype=np.float64)
+    tris = []
+    for a, b, c in faces:
+        if 0 <= a < len(v) and 0 <= b < len(v) and 0 <= c < len(v):
+            tris.append([v[a], v[b], v[c]])
+    return np.array(tris) if tris else None
+
+
+def _render_facets(tris, size: int) -> bytes:
+    from PIL import Image, ImageDraw
+    import numpy as np
+    c = tris.reshape(-1, 3)
+    span = (c.max(0) - c.min(0)).max() or 1e-9
+    t = (tris - c.min(0)) / span - 0.5
+    az, el = 0.6, 0.45
+    ca, sa, ce, se = np.cos(az), np.sin(az), np.cos(el), np.sin(el)
+    x = t[..., 0] * ca + t[..., 2] * sa
+    z = -t[..., 0] * sa + t[..., 2] * ca
+    y = t[..., 1] * ce - z * se
+    z2 = t[..., 1] * se + z * ce
+    e1, e2 = x[:, 1] - x[:, 0], y[:, 1] - y[:, 0]
+    f1, f2 = x[:, 2] - x[:, 0], y[:, 2] - y[:, 0]
+    nz = e1 * f2 - e2 * f1
+    nx = (y[:, 1] - y[:, 0]) * (z2[:, 2] - z2[:, 0]) - (z2[:, 1] - z2[:, 0]) * (y[:, 2] - y[:, 0])
+    ny = (z2[:, 1] - z2[:, 0]) * (x[:, 2] - x[:, 0]) - (x[:, 1] - x[:, 0]) * (z2[:, 2] - z2[:, 0])
+    ln = np.sqrt(nx * nx + ny * ny + nz * nz) + 1e-9
+    light = np.array([0.4, 0.5, 0.75])
+    light /= np.linalg.norm(light)
+    s = np.clip((nx * light[0] + ny * light[1] + nz * light[2]) / ln, 0, 1)
+    order = np.argsort(z2.mean(1))
+    im = Image.new("RGB", (size, size), (18, 18, 24))
+    d = ImageDraw.Draw(im)
+    px = (x * 0.85 + 0.5) * size
+    py = (0.5 - y * 0.85) * size
+    for i in order:
+        g = int(45 + 175 * s[i])
+        d.polygon([float(px[i, 0]), float(py[i, 0]), float(px[i, 1]),
+                   float(py[i, 1]), float(px[i, 2]), float(py[i, 2])],
+                  fill=(g, g, min(255, g + 12)))
+    buf = io.BytesIO()
+    im.save(buf, "JPEG", quality=72)
+    return buf.getvalue()
+
+
+@router.post("/modelthumb")
+def modelthumb(body: MediaIn) -> JSONResponse:
+    ext = Path(body.path).suffix.lower()
+    if ext not in MODEL_EXTS:
+        return JSONResponse({"error": "not a model"}, status_code=400)
+    size = max(32, min(body.size, 512))
+    try:
+        tris = _stl_facets(body.path) if ext == ".stl" else _obj_facets(body.path)
+        if tris is None or not len(tris):
+            return JSONResponse({"error": "no geometry"}, status_code=422)
+        img = _render_facets(tris, size)
+        return JSONResponse(
+            {"data_url": f"data:image/jpeg;base64,{base64.b64encode(img).decode('ascii')}",
+             "tris": int(len(tris))})
+    except FileNotFoundError:
+        return JSONResponse({"error": "not found"}, status_code=404)
+    except Exception as e:
+        return JSONResponse({"error": str(e)[:200]}, status_code=500)
 
 
 class MkdirIn(BaseModel):

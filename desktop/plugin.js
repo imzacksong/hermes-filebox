@@ -9,7 +9,7 @@
 import {
   atom, Button, Codicon, ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger, GlyphSpinner, SearchField, STATUSBAR_AREAS, Tip, usePluginI18n, useQuery, useValue
 } from '@hermes/plugin-sdk'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { jsx, jsxs } from 'react/jsx-runtime'
 
 const ID = 'filebox'
@@ -59,6 +59,8 @@ const EN = {
   collapse: 'Collapse panel', expand: 'Expand panel',
   binaryFile: 'Binary file — no text preview.',
   mediaBlocked: 'Preview blocked here — use Open instead.',
+  bigModel: 'Model too large to preview — use Open instead.',
+  resetView: 'Reset view',
   readFull: 'Read full file',
   showLess: 'Show less',
   send: 'Send to…',
@@ -133,6 +135,7 @@ const CODE_EXTS = new Set(['.py', '.js', '.ts', '.tsx', '.jsx', '.mjs', '.cjs', 
 const IMG_EXTS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp', '.ico', '.tif', '.tiff'])
 const VID_EXTS = new Set(['.mp4', '.mkv', '.avi', '.mov', '.wmv', '.webm', '.m4v', '.ts'])
 const AUD_EXTS = new Set(['.mp3', '.wav', '.flac', '.ogg', '.m4a', '.opus', '.wma'])
+const MODEL_EXTS = new Set(['.stl', '.obj'])
 const ZIP_EXTS = new Set(['.zip', '.7z', '.rar', '.tar', '.gz'])
 
 function category(e) {
@@ -140,6 +143,7 @@ function category(e) {
   if (IMG_EXTS.has(e.ext)) return 'img'
   if (AUD_EXTS.has(e.ext)) return 'audio'
   if (VID_EXTS.has(e.ext)) return 'video'
+  if (MODEL_EXTS.has(e.ext)) return 'model'
   if (ZIP_EXTS.has(e.ext)) return 'zip'
   if (CODE_EXTS.has(e.ext)) return 'code'
   if (e.ext === '.pdf') return 'pdf'
@@ -181,13 +185,24 @@ function splitPath(path) {
   return parts
 }
 
-function Thumb({ ctx, entry, px }) {
+function thumbKind(ext) {
+  if (IMG_EXTS.has(ext)) return 'img'
+  if (VID_EXTS.has(ext)) return 'video'
+  if (MODEL_EXTS.has(ext)) return 'model'
+  return null
+}
+
+function Thumb({ ctx, entry, px, fallback }) {
+  const kind = thumbKind(entry.ext)
+  const ep = kind === 'video' ? '/videothumb' : kind === 'model' ? '/modelthumb' : '/thumb'
   const q = useQuery({
-    queryKey: [ID, 'thumb', entry.path, entry.mtime],
-    queryFn: ({ signal }) => ctx.rest('/thumb', { method: 'POST', timeoutMs: 15000, signal, body: { path: entry.path, size: 256 } }),
+    queryKey: [ID, ep, entry.path, entry.mtime],
+    queryFn: ({ signal }) => ctx.rest(ep, { method: 'POST', timeoutMs: 30000, signal, body: { path: entry.path, size: 256 } }),
+    enabled: !!kind,
     staleTime: 300000,
     retry: false,
   })
+  if (!kind || q.isError) return fallback || null
   if (!q.data?.data_url) return null
   return jsx('img', { className: 'hermes-fb-tileimg', src: q.data.data_url, alt: '', loading: 'lazy', style: { width: px, height: px } })
 }
@@ -196,11 +211,156 @@ function fileUrl(path) {
   return 'file:///' + String(path || '').replace(/\\/g, '/').split('/').map(encodeURIComponent).join('/')
 }
 
+function parseModel(ext, bytes) {
+  const capTris = 12000
+  if (ext === '.obj') {
+    const text = new TextDecoder().decode(bytes.slice(0, 32 * 1024 * 1024))
+    const verts = []
+    const out = []
+    for (const line of text.split('\n')) {
+      if (line[0] === 'v' && line[1] === ' ') {
+        const p = line.split(/\s+/)
+        verts.push([+p[1], +p[2], +p[3]])
+      } else if (line[0] === 'f' && line[1] === ' ') {
+        const idx = line.slice(1).trim().split(/\s+/).map(s => parseInt(s.split('/')[0], 10) - 1)
+        for (let k = 1; k < idx.length - 1 && out.length < capTris * 9; k++) {
+          for (const j of [idx[0], idx[k], idx[k + 1]]) {
+            const v = verts[j]
+            if (v && v.every(Number.isFinite)) out.push(v[0], v[1], v[2])
+          }
+        }
+      }
+      if (out.length >= capTris * 9) break
+    }
+    const n = Math.floor(out.length / 9)
+    return n ? { tris: new Float32Array(out.slice(0, n * 9)), n } : null
+  }
+  if (bytes.length > 84) {
+    const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+    const count = dv.getUint32(80, true)
+    if (count > 0 && count < 3000000 && 84 + count * 50 === bytes.length) {
+      const stride = Math.max(1, Math.ceil(count / capTris))
+      const out = []
+      for (let i = 0; i < count; i += stride) {
+        const o = 84 + i * 50 + 12
+        for (let k = 0; k < 9; k++) out.push(dv.getFloat32(o + k * 4, true))
+      }
+      return { tris: new Float32Array(out), n: Math.floor(out.length / 9) }
+    }
+  }
+  const text = new TextDecoder().decode(bytes.slice(0, 64 * 1024 * 1024))
+  const re = /vertex\s+(\S+)\s+(\S+)\s+(\S+)/g
+  const out = []
+  let m
+  while ((m = re.exec(text)) && out.length < capTris * 9) out.push(+m[1], +m[2], +m[3])
+  const n = Math.floor(out.length / 9)
+  return n ? { tris: new Float32Array(out.slice(0, n * 9)), n } : null
+}
+
+function drawModel(canvas, geo, rx, ry, zoom) {
+  const W = canvas.width, H = canvas.height
+  const g = canvas.getContext('2d')
+  g.fillStyle = '#141419'
+  g.fillRect(0, 0, W, H)
+  const { tris, n } = geo
+  const b = geo.bounds
+  const span = Math.max(b.x1 - b.x0, b.y1 - b.y0, b.z1 - b.z0, 1e-9)
+  const s = Math.min(W, H) * 0.42 * zoom / span
+  const ox = W / 2, oy = H / 2
+  const cx = (b.x0 + b.x1) / 2, cy = (b.y0 + b.y1) / 2, cz = (b.z0 + b.z1) / 2
+  const c1 = Math.cos(ry), s1 = Math.sin(ry), c2 = Math.cos(rx), s2 = Math.sin(rx)
+  const items = []
+  for (let i = 0; i < n; i++) {
+    const p = []
+    for (let k = 0; k < 3; k++) {
+      const X = tris[i * 9 + k * 3] - cx, Y = tris[i * 9 + k * 3 + 1] - cy, Z = tris[i * 9 + k * 3 + 2] - cz
+      const x1 = X * c1 + Z * s1, z1 = -X * s1 + Z * c1
+      const y1 = Y * c2 - z1 * s2, z2 = Y * s2 + z1 * c2
+      p.push(ox + x1 * s, oy - y1 * s, z2)
+    }
+    const ex = p[3] - p[0], ey = p[4] - p[1], ez = p[5] - p[2]
+    const fx = p[6] - p[0], fy = p[7] - p[1], fz = p[8] - p[2]
+    const nx = ey * fz - ez * fy, ny = ez * fx - ex * fz, nz = ex * fy - ey * fx
+    const ln = Math.sqrt(nx * nx + ny * ny + nz * nz) + 1e-9
+    const shade = Math.abs((nx * 0.4 + ny * 0.5 + nz * 0.75) / ln / 1.05)
+    items.push({ p, d: (p[2] + p[5] + p[8]) / 3, v: Math.round(45 + 175 * Math.min(1, 0.15 + 0.85 * shade)) })
+  }
+  items.sort((a, b) => a.d - b.d)
+  for (const it of items) {
+    const v = it.v
+    g.fillStyle = `rgb(${v},${v},${Math.min(255, v + 12)})`
+    g.beginPath()
+    g.moveTo(it.p[0], it.p[1])
+    g.lineTo(it.p[3], it.p[4])
+    g.lineTo(it.p[6], it.p[7])
+    g.closePath()
+    g.fill()
+  }
+}
+
+function ModelView({ ctx, t, entry }) {
+  const ref = useRef(null)
+  const [rot, setRot] = useState({ x: 0.5, y: 0.6, z: 1 })
+  const q = useQuery({
+    queryKey: [ID, 'raw', entry.path, entry.mtime],
+    queryFn: ({ signal }) => ctx.rest('/raw', { method: 'POST', timeoutMs: 30000, signal, body: { path: entry.path, max_mb: 48 } }),
+    enabled: entry.size < 96 * 1024 * 1024,
+    staleTime: 300000,
+    retry: false,
+  })
+  const geo = useMemo(() => {
+    if (!q.data?.b64) return null
+    try {
+      const bin = Uint8Array.from(atob(q.data.b64), c => c.charCodeAt(0))
+      const parsed = parseModel(entry.ext, bin)
+      if (!parsed || !parsed.tris.every(Number.isFinite)) return { error: true }
+      let x0 = 1 / 0, y0 = 1 / 0, z0 = 1 / 0, x1 = -1 / 0, y1 = -1 / 0, z1 = -1 / 0
+      const tr = parsed.tris
+      for (let i = 0; i < tr.length; i += 3) {
+        const X = tr[i], Y = tr[i + 1], Z = tr[i + 2]
+        if (X < x0) x0 = X; if (X > x1) x1 = X
+        if (Y < y0) y0 = Y; if (Y > y1) y1 = Y
+        if (Z < z0) z0 = Z; if (Z > z1) z1 = Z
+      }
+      return { ...parsed, bounds: { x0, y0, z0, x1, y1, z1 } }
+    } catch { return { error: true } }
+  }, [q.data])
+  useEffect(() => {
+    if (ref.current && geo && !geo.error) {
+      try { drawModel(ref.current, geo, rot.x, rot.y, rot.z) } catch { /* noop */ }
+    }
+  }, [geo, rot])
+  const startSpin = e => {
+    e.preventDefault()
+    const sx = e.clientX, sy = e.clientY
+    const r0 = { ...rot }
+    const move = ev => setRot(r => ({ ...r, x: r0.x + (ev.clientY - sy) * 0.01, y: r0.y + (ev.clientX - sx) * 0.01 }))
+    const up = () => { window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up) }
+    window.addEventListener('mousemove', move)
+    window.addEventListener('mouseup', up)
+  }
+  if (entry.size >= 96 * 1024 * 1024) return jsx('div', { className: 'hermes-fb-error', children: t('bigModel') })
+  if (q.isError) return jsx('div', { className: 'hermes-fb-error', children: t('mediaBlocked') })
+  if (!geo) return jsx(GlyphSpinner, { ariaLabel: entry.name })
+  if (geo.error) return jsx('div', { className: 'hermes-fb-error', children: t('mediaBlocked') })
+  return jsxs('div', { children: [
+    jsx('canvas', { ref, width: 560, height: 340, onMouseDown: startSpin, style: { width: '100%', borderRadius: 6, marginTop: 4, cursor: 'grab', background: '#141419', touchAction: 'none' } }),
+    jsxs('div', { className: 'hermes-fb-actions', children: [
+      jsx('span', { className: 'hermes-fb-tilesub', children: `${geo.n} tris · drag to rotate` }),
+      jsx('span', { style: { flex: 1 } }),
+      jsx(Button, { size: 'micro', variant: 'ghost', onClick: () => setRot(r => ({ ...r, z: Math.max(0.3, +(r.z / 1.25).toFixed(2)) })), children: '−' }),
+      jsx(Button, { size: 'micro', variant: 'ghost', onClick: () => setRot(r => ({ ...r, z: Math.min(5, +(r.z * 1.25).toFixed(2)) })), children: '+' }),
+      jsx(Button, { size: 'micro', variant: 'ghost', onClick: () => setRot({ x: 0.5, y: 0.6, z: 1 }), children: t('resetView') }),
+    ] }),
+  ] })
+}
+
 function Preview({ ctx, t, entry, refetch, select }) {
   const isImg = IMG_EXTS.has(entry.ext)
   const isAudio = AUD_EXTS.has(entry.ext)
   const isVideo = VID_EXTS.has(entry.ext)
-  const isTextish = !entry.is_dir && !isImg && !isAudio && !isVideo && entry.ext !== '.pdf'
+  const isModel = MODEL_EXTS.has(entry.ext)
+  const isTextish = !entry.is_dir && !isImg && !isAudio && !isVideo && !isModel && entry.ext !== '.pdf'
   const isPdf = !entry.is_dir && entry.ext === '.pdf'
   const [mediaErr, setMediaErr] = useState(false)
   const [fullRead, setFullRead] = useState(false)
@@ -356,6 +516,7 @@ function Preview({ ctx, t, entry, refetch, select }) {
     (isAudio || isVideo) && mediaErr && jsx('div', { className: 'hermes-fb-error', children: t('mediaBlocked') }),
     isPdf && !mediaErr && jsx('iframe', { src: fileUrl(entry.path), title: entry.name, style: { width: '100%', height: 480, border: 0, borderRadius: 6, marginTop: 4, background: '#fff' }, onError: () => setMediaErr(true) }),
     isPdf && mediaErr && jsx('div', { className: 'hermes-fb-error', children: t('mediaBlocked') }),
+    isModel && jsx(ModelView, { ctx, t, entry }),
     isTextish && text.data && !fullRead && (text.data.is_binary
       ? jsx('div', { className: 'hermes-fb-error', children: t('binaryFile') })
       : jsxs('div', { children: [
@@ -630,9 +791,7 @@ function TabPane({ ctx, tabId, initialCwd, sort, setSort, tilePx, setTilePx, sho
             onKeyDown: ev => { if (ev.key === 'Enter') openEntry(e) },
             'aria-label': e.name,
             children: [
-              cat === 'img'
-                ? (jsx(Thumb, { ctx, entry: e, px: iconPx }) || jsx('span', { className: 'hermes-fb-tileicon', children: jsx(Codicon, { name: iconFor(cat), size: iconPx }) }))
-                : jsx('span', { className: 'hermes-fb-tileicon', children: jsx(Codicon, { name: iconFor(cat), size: iconPx }) }),
+              jsx(Thumb, { ctx, entry: e, px: iconPx, fallback: jsx('span', { className: 'hermes-fb-tileicon', children: jsx(Codicon, { name: iconFor(cat), size: iconPx }) }) }),
               jsx('span', { className: 'hermes-fb-tilename', children: e.name }),
               jsx('span', { className: 'hermes-fb-tilesub', children: e.is_dir ? '—' : fmtSize(e.size) }),
             ],
