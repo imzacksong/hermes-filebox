@@ -2,8 +2,8 @@
 
 Mounted at /api/plugins/filebox/. Localhost only, same trust as the terminal:
 reads anything the user could `dir`, writes anything they could do in Explorer
-(rename/copy/move/delete/mkdir/zip/extract). Destructive ops are recursive;
-the UI confirms before delete.
+(rename/copy/move/delete/mkdir/zip/extract). Delete goes to the recycle bin
+(send2trash); the UI still confirms first.
 """
 from __future__ import annotations
 
@@ -363,6 +363,12 @@ class DeleteIn(BaseModel):
 def delete(body: DeleteIn) -> JSONResponse:
     if not body.paths:
         return JSONResponse({"error": "nothing selected"}, status_code=400)
+    try:
+        from send2trash import send2trash
+    except ImportError:
+        return JSONResponse(
+            {"error": "send2trash missing — pip install send2trash (refusing permanent delete)"},
+            status_code=501)
     done, failed = [], []
     for raw in body.paths:
         try:
@@ -373,10 +379,7 @@ def delete(body: DeleteIn) -> JSONResponse:
             if (g := _guard_root(p)):
                 failed.append({"path": raw, "error": "drive root"})
                 continue
-            if p.is_dir() and not p.is_symlink():
-                shutil.rmtree(p)
-            else:
-                p.unlink()
+            send2trash(str(p))
             done.append(raw)
         except PermissionError:
             failed.append({"path": raw, "error": "access denied"})
