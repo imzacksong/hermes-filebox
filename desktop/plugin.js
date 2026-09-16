@@ -18,6 +18,16 @@ const collapsed = atom(true)
 const clipboard = atom(null)
 const pendingRename = atom(null)
 const pendingDelete = atom(null)
+const dirBump = atom(0)
+
+function hasFbPaths(ev) {
+  try { return Array.from(ev.dataTransfer?.types || []).includes('application/x-filebox-paths') } catch { return false }
+}
+
+function parentDir(p) {
+  const d = String(p || '').replace(/[/\\][^/\\]+$/, '')
+  return d || p
+}
 let paneCtx = null
 let paneRegister = null
 let paneDispose = null
@@ -63,11 +73,6 @@ const EN = {
   resetView: 'Reset view',
   readFull: 'Read full file',
   showLess: 'Show less',
-  send: 'Send to…',
-  sending: 'Sharing…',
-  copyLink: 'Copy link',
-  linkCopied: 'Link copied — works on your LAN.',
-  stopSharing: 'Stop sharing',
 }
 const LOCALES = { en: EN }
 
@@ -129,6 +134,7 @@ const CSS = `
 .hermes-fb-pvwrap .hermes-fb-preview{border-top:0;flex:1;min-height:0;max-height:none}
 .hermes-fb-griph{height:6px;cursor:row-resize;flex-shrink:0}
 .hermes-fb-griph:hover{background:var(--ui-accent)}
+.hermes-fb-tile[data-drop=true]{border-color:var(--ui-accent);background:var(--chrome-action-hover)}
 `
 
 const CODE_EXTS = new Set(['.py', '.js', '.ts', '.tsx', '.jsx', '.mjs', '.cjs', '.json', '.yaml', '.yml', '.toml', '.md', '.txt', '.log', '.ini', '.cfg', '.css', '.html', '.xml', '.csv', '.ps1', '.bat', '.sh', '.java', '.c', '.cpp', '.h', '.rs', '.go', '.kt', '.sql', '.vue'])
@@ -364,23 +370,6 @@ function Preview({ ctx, t, entry, refetch, select }) {
   const isPdf = !entry.is_dir && entry.ext === '.pdf'
   const [mediaErr, setMediaErr] = useState(false)
   const [fullRead, setFullRead] = useState(false)
-  const [share, setShare] = useState(null)
-  const [sharing, setSharing] = useState(false)
-  const [notifyState, setNotifyState] = useState('idle')
-  const peerCfg = useQuery({ queryKey: [ID, 'peerCfg'], queryFn: () => ctx.rest('/config', { method: 'POST', timeoutMs: 10000 }), staleTime: Infinity })
-  const peerLabel = peerCfg.data?.label || 'friend'
-  const agentName = peerCfg.data?.agent || 'their agent'
-  const doShare = async () => {
-    if (sharing) return
-    setSharing(true)
-    try {
-      const r = await ctx.rest('/share', { method: 'POST', timeoutMs: 15000, body: { path: entry.path } })
-      setShare(r)
-    } catch (e) {
-      hostNotify(ctx, String((e && e.message) || e))
-    }
-    setSharing(false)
-  }
   const [renameMode, setRenameMode] = useState(false)
   const [renameName, setRenameName] = useState(entry.name)
   const [confirmDel, setConfirmDel] = useState(false)
@@ -442,23 +431,6 @@ function Preview({ ctx, t, entry, refetch, select }) {
       refetch()
     } catch (e) { opErr(e) }
     setOpBusy(false)
-  }
-  const stopShare = async () => {
-    if (share?.token) {
-      try { await ctx.rest('/revoke', { method: 'POST', timeoutMs: 10000, body: { token: share.token } }) } catch { /* noop */ }
-    }
-    setShare(null)
-    setNotifyState('idle')
-  }
-  const notifyNina = async () => {
-    if (!share?.url || notifyState === 'busy') return
-    setNotifyState('busy')
-    try {
-      await ctx.rest('/notify', { method: 'POST', timeoutMs: 150000, body: { url: share.url, name: entry.name } })
-      setNotifyState('ok')
-    } catch {
-      setNotifyState('fail')
-    }
   }
   const thumb = useQuery({
     queryKey: [ID, 'thumb', entry.path, entry.mtime, 'pv'],
@@ -531,18 +503,7 @@ function Preview({ ctx, t, entry, refetch, select }) {
     ] }),
     jsxs('div', { className: 'hermes-fb-actions', children: [
       !entry.is_dir && jsx(Button, { size: 'micro', onClick: openFile, children: t('openFile') }),
-      !entry.is_dir && !share && jsx(Button, { size: 'micro', variant: 'ghost', onClick: doShare, disabled: sharing, children: sharing ? jsx(GlyphSpinner, { ariaLabel: t('sending') }) : t('send') }),
       jsx(Button, { size: 'micro', variant: 'ghost', onClick: () => ctx.os.revealPath(entry.is_dir ? entry.path : entry.path.replace(/[/\\][^/\\]+$/, '')), children: t('reveal') }),
-    ] }),
-    share?.url && jsxs('div', { children: [
-      jsx('input', { value: share.url, readOnly: true, 'aria-label': 'share link', onFocus: e => e.target.select(), style: { width: '100%', height: 24, fontSize: 11, padding: '0 6px', borderRadius: 4, border: '1px solid var(--ui-stroke-secondary)', background: 'transparent', color: 'var(--ui-text-primary)', boxSizing: 'border-box', marginTop: 6 } }),
-      jsxs('div', { className: 'hermes-fb-actions', children: [
-        jsx(Button, { size: 'micro', onClick: async () => { await ctx.os.writeClipboard(share.url); hostNotify(ctx, t('linkCopied')) }, children: t('copyLink') }),
-        notifyState !== 'ok' && jsx(Button, { size: 'micro', variant: 'ghost', onClick: notifyNina, disabled: notifyState === 'busy', children: notifyState === 'busy' ? jsx(GlyphSpinner, { ariaLabel: 'Telling ' + agentName + '…' }) : 'Tell ' + peerLabel }),
-        jsx(Button, { size: 'micro', variant: 'ghost', onClick: stopShare, children: t('stopSharing') }),
-      ] }),
-      notifyState === 'ok' && jsx('div', { className: 'hermes-fb-error', role: 'status', children: agentName + ' will pass it to ' + peerLabel + '.' }),
-      notifyState === 'fail' && jsx('div', { className: 'hermes-fb-error', role: 'status', children: 'Could not reach ' + agentName + ' — copy the link instead.' }),
     ] }),
   ] })
 }
@@ -563,6 +524,8 @@ function TabPane({ ctx, tabId, initialCwd, sort, setSort, tilePx, setTilePx, sho
   const [pins, setPins] = useState(() => ctx.storage.get('pins', null))
   const [mkdirMode, setMkdirMode] = useState(false)
   const [mkdirName, setMkdirName] = useState('')
+  const [dropPath, setDropPath] = useState(null)
+  const bump = useValue(dirBump)
 
   const roots = useQuery({
     queryKey: [ID, 'roots'],
@@ -575,7 +538,7 @@ function TabPane({ ctx, tabId, initialCwd, sort, setSort, tilePx, setTilePx, sho
   const pinsEffective = pins || (home ? [home] : [])
 
   const list = useQuery({
-    queryKey: [ID, 'list', cwd, showHidden],
+    queryKey: [ID, 'list', cwd, showHidden, bump],
     queryFn: ({ signal }) => ctx.rest('/list', { method: 'POST', timeoutMs: 20000, signal, body: { path: cwd, show_hidden: showHidden } }),
     enabled: !!cwd,
     staleTime: 10000,
@@ -668,6 +631,16 @@ function TabPane({ ctx, tabId, initialCwd, sort, setSort, tilePx, setTilePx, sho
       if (!r?.ok) hostNotify(ctx, ((r?.failed?.[0]?.error) || 'paste failed'))
       else if (c.mode === 'cut') clipboard.set(null)
       list.refetch()
+    } catch (e) { hostNotify(ctx, String((e && e.message) || e)) }
+  }
+
+  const dropMove = async (paths, dest) => {
+    const final = (paths || []).filter(p => typeof p === 'string' && p && p !== dest && parentDir(p) !== dest)
+    if (!final.length || !dest) return
+    try {
+      const r = await ctx.rest('/move', { method: 'POST', timeoutMs: 60000, body: { paths: final, dest_dir: dest } })
+      if (!r?.ok) hostNotify(ctx, (r?.failed?.[0]?.error) || 'move failed')
+      dirBump.set(dirBump.get() + 1)
     } catch (e) { hostNotify(ctx, String((e && e.message) || e)) }
   }
 
@@ -776,7 +749,11 @@ function TabPane({ ctx, tabId, initialCwd, sort, setSort, tilePx, setTilePx, sho
         jsx(Button, { size: 'micro', onClick: doMkdir, children: t('create') }),
         jsx(Button, { size: 'micro', variant: 'ghost', onClick: () => { setMkdirMode(false); setMkdirName('') }, children: t('cancel') }),
       ] }),
-      jsxs('div', { className: 'hermes-fb-grid', style: { gridTemplateColumns: `repeat(auto-fill,minmax(${tilePx + 16}px,1fr))` }, children: [
+      jsxs('div', { className: 'hermes-fb-grid', style: { gridTemplateColumns: `repeat(auto-fill,minmax(${tilePx + 16}px,1fr))` }, onDragOver: ev => { if (hasFbPaths(ev)) ev.preventDefault() }, onDrop: ev => {
+        if (ev.target?.closest && ev.target.closest('[data-dir="true"]')) return
+        ev.preventDefault()
+        try { dropMove(JSON.parse(ev.dataTransfer.getData('application/x-filebox-paths') || '[]'), cwd) } catch {}
+      }, children: [
         list.isFetching && !list.data && jsx(GlyphSpinner, { ariaLabel: t('explorer') }),
         list.isError && jsx('div', { className: 'hermes-fb-error', role: 'status', children: t('backendDown') }),
         ...shown.map(e => {
@@ -785,6 +762,12 @@ function TabPane({ ctx, tabId, initialCwd, sort, setSort, tilePx, setTilePx, sho
           return jsx(ContextMenu, { children: [
           jsx(ContextMenuTrigger, { asChild: true, children: jsx('button', {
             className: 'hermes-fb-tile', 'data-on': selected === e.path, 'data-dir': e.is_dir,
+            'data-drop': dropPath === e.path,
+            draggable: true,
+            onDragStart: ev => { try { ev.dataTransfer.setData('application/x-filebox-paths', JSON.stringify([e.path])) } catch {} ev.dataTransfer.effectAllowed = 'move'; setSelected(e.path) },
+            onDragOver: e.is_dir ? (ev => { if (hasFbPaths(ev)) { ev.preventDefault(); ev.dataTransfer.dropEffect = 'move'; setDropPath(e.path) } }) : undefined,
+            onDragLeave: e.is_dir ? (ev => { if (!ev.currentTarget.contains(ev.relatedTarget)) setDropPath(cur => cur === e.path ? null : cur) }) : undefined,
+            onDrop: e.is_dir ? (ev => { ev.preventDefault(); setDropPath(null); try { dropMove(JSON.parse(ev.dataTransfer.getData('application/x-filebox-paths') || '[]'), e.path) } catch {} }) : undefined,
             onClick: () => setSelected(selected === e.path ? null : e.path),
             onContextMenu: () => setSelected(e.path),
             onDoubleClick: () => openEntry(e),
