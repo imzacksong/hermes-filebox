@@ -8,11 +8,13 @@ reads anything the user could `dir`, writes anything they could do in Explorer
 from __future__ import annotations
 
 import base64
+import hashlib
 import io
 import json
 import os
 import shutil
 import subprocess
+import tempfile
 import time
 import zipfile
 from pathlib import Path
@@ -53,6 +55,62 @@ class MediaIn(BaseModel):
     size: int = 256
 
 
+THUMB_CACHE_DIR = Path(tempfile.gettempdir()) / "filebox-thumbs"
+THUMB_CACHE_MAX_FILES = 2000
+THUMB_CACHE_MAX_BYTES = 500 * 1024 * 1024
+
+
+def _thumb_key(path: str, kind: str, size: int) -> Optional[str]:
+    """Cache key binding path + content version (mtime, size)."""
+    try:
+        st = os.stat(path)
+        sig = f"{path}|{st.st_mtime_ns}|{st.st_size}|{kind}|{size}"
+        return hashlib.sha1(sig.encode("utf-8")).hexdigest() + ".jpg"
+    except Exception:
+        return None
+
+
+def _thumb_get(key: Optional[str]) -> Optional[bytes]:
+    if not key:
+        return None
+    try:
+        p = THUMB_CACHE_DIR / key
+        if p.is_file():
+            return p.read_bytes()
+    except Exception:
+        pass
+    return None
+
+
+def _thumb_put(key: Optional[str], data: bytes) -> None:
+    if not key or not data:
+        return
+    try:
+        THUMB_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        (THUMB_CACHE_DIR / key).write_bytes(data)
+    except Exception:
+        return
+    # Opportunistic prune: oldest first, only when over a limit.
+    try:
+        files = [(f.stat().st_mtime, f.stat().st_size, f)
+                 for f in THUMB_CACHE_DIR.iterdir() if f.is_file()]
+        total = sum(s for _, s, _ in files)
+        if len(files) > THUMB_CACHE_MAX_FILES or total > THUMB_CACHE_MAX_BYTES:
+            files.sort()
+            kept = len(files)
+            for _, s, f in files:
+                if kept <= THUMB_CACHE_MAX_FILES // 2 and total <= THUMB_CACHE_MAX_BYTES // 2:
+                    break
+                try:
+                    f.unlink()
+                    total -= s
+                    kept -= 1
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+
 @router.post("/videothumb")
 def videothumb(body: MediaIn) -> JSONResponse:
     if Path(body.path).suffix.lower() not in VIDEO_EXTS:
@@ -61,6 +119,12 @@ def videothumb(body: MediaIn) -> JSONResponse:
     if not ff:
         return JSONResponse({"error": "ffmpeg missing"}, status_code=501)
     size = max(32, min(body.size, 512))
+    key = _thumb_key(body.path, "video", size)
+    hit = _thumb_get(key)
+    if hit is not None:
+        return JSONResponse(
+            {"data_url": f"data:image/jpeg;base64,{base64.b64encode(hit).decode('ascii')}",
+             "cached": True})
     t = 1.0
     fp = shutil.which("ffprobe")
     if fp:
@@ -81,6 +145,7 @@ def videothumb(body: MediaIn) -> JSONResponse:
             capture_output=True, timeout=30)
         if out.returncode != 0 or not out.stdout:
             return JSONResponse({"error": "no frame"}, status_code=422)
+        _thumb_put(key, bytes(out.stdout))
         b64 = base64.b64encode(out.stdout).decode("ascii")
         return JSONResponse({"data_url": f"data:image/jpeg;base64,{b64}"})
     except subprocess.TimeoutExpired:
@@ -222,10 +287,17 @@ def modelthumb(body: MediaIn) -> JSONResponse:
         return JSONResponse({"error": "not a model"}, status_code=400)
     size = max(32, min(body.size, 512))
     try:
+        key = _thumb_key(body.path, "model", size)
+        hit = _thumb_get(key)
+        if hit is not None:
+            return JSONResponse(
+                {"data_url": f"data:image/jpeg;base64,{base64.b64encode(hit).decode('ascii')}",
+                 "cached": True})
         tris = _stl_facets(body.path) if ext == ".stl" else _obj_facets(body.path)
         if tris is None or not len(tris):
             return JSONResponse({"error": "no geometry"}, status_code=422)
         img = _render_facets(tris, size)
+        _thumb_put(key, img)
         return JSONResponse(
             {"data_url": f"data:image/jpeg;base64,{base64.b64encode(img).decode('ascii')}",
              "tris": int(len(tris))})
@@ -327,9 +399,11 @@ def _paste(op: str, body: OpIn) -> JSONResponse:
                 dst = _free_path(dest / src.name)
                 if op == "copy":
                     if src.is_dir():
-                        shutil.copytree(src, dst)
+                        # symlinks=True: copy links as links — never follow
+                        # a linked tree off into the source or a loop.
+                        shutil.copytree(src, dst, symlinks=True)
                     else:
-                        shutil.copy2(src, dst)
+                        shutil.copy2(src, dst, follow_symlinks=False)
                 else:
                     shutil.move(str(src), str(dst))
                 done.append(str(dst))
@@ -584,12 +658,19 @@ def thumb(body: ThumbIn) -> JSONResponse:
             return JSONResponse({"error": "too large"}, status_code=413)
         from PIL import Image
         size = max(32, min(body.size, 512))
+        key = _thumb_key(body.path, "img", size)
+        hit = _thumb_get(key)
+        if hit is not None:
+            b64 = base64.b64encode(hit).decode("ascii")
+            return JSONResponse({"data_url": f"data:image/jpeg;base64,{b64}",
+                                 "cached": True})
         with Image.open(body.path) as im:
             im.draft("RGB", (size, size))
             im = im.convert("RGB")
             im.thumbnail((size, size))
             buf = io.BytesIO()
             im.save(buf, "JPEG", quality=70)
+        _thumb_put(key, buf.getvalue())
         b64 = base64.b64encode(buf.getvalue()).decode("ascii")
         return JSONResponse({"data_url": f"data:image/jpeg;base64,{b64}"})
     except FileNotFoundError:
@@ -615,80 +696,6 @@ def mkdir(body: MkdirIn) -> JSONResponse:
         return JSONResponse({"error": "access denied"}, status_code=403)
     except Exception as e:
         return JSONResponse({"error": str(e)[:200]}, status_code=500)
-
-
-class SearchIn(BaseModel):
-    root: str = ""
-    query: str = ""
-    show_hidden: bool = False
-    max_results: int = 200
-    max_depth: int = 8
-
-
-@router.post("/search")
-def search_files(body: SearchIn) -> JSONResponse:
-    """Recursive filename search under root. Name matches only (no content).
-
-    Bounded: max_results (cap 1000), max_depth (cap 12), and a dir-scan
-    budget so a drive-root search can't hang the gateway. Symlinked dirs
-    are matched by name but never descended into (loop-proof).
-    """
-    q = (body.query or "").strip().lower()
-    if len(q) < 2:
-        return JSONResponse({"error": "query too short"}, status_code=400)
-    try:
-        root = Path(body.root)
-        if not root.is_dir():
-            return JSONResponse({"error": "bad root"}, status_code=400)
-    except Exception:
-        return JSONResponse({"error": "bad root"}, status_code=400)
-    max_results = max(1, min(body.max_results or 200, 1000))
-    max_depth = max(0, min(body.max_depth or 8, 12))
-    dir_budget = 20000
-    out: List[Dict[str, Any]] = []
-    truncated = False
-    try:
-        stack = [(str(root), 0)]
-        while stack and len(out) < max_results:
-            cur, depth = stack.pop()
-            if dir_budget <= 0:
-                truncated = True
-                break
-            dir_budget -= 1
-            try:
-                with os.scandir(cur) as it:
-                    children = list(it)
-            except (PermissionError, FileNotFoundError, OSError):
-                continue
-            for scan in children:
-                try:
-                    is_dir = scan.is_dir(follow_symlinks=False)
-                except Exception:
-                    continue
-                e = _entry(scan, body.show_hidden)
-                if e is None:
-                    continue
-                if q in scan.name.lower():
-                    out.append(e)
-                    if len(out) >= max_results:
-                        truncated = True
-                        break
-                if is_dir and depth < max_depth:
-                    try:
-                        if not os.path.islink(scan.path):
-                            stack.append((scan.path, depth + 1))
-                    except Exception:
-                        pass
-        return JSONResponse({"ok": True, "root": str(root), "query": body.query,
-                             "entries": out, "total": len(out),
-                             "truncated": truncated})
-    except Exception as e:
-        return JSONResponse({"error": str(e)[:200]}, status_code=500)
-
-
-@router.get("/health")
-def health() -> Dict[str, Any]:
-    return {"ok": True}
 
 
 # === FILEBOX-UPDATER-START === (stripped in catalog builds; keep this block last-safe: nothing below may be updater code)
@@ -845,6 +852,161 @@ def update_plugin() -> Dict[str, Any]:
 
 # === FILEBOX-UPDATER-END ===
 
+
+class WriteIn(BaseModel):
+    path: str = ""
+    text: str = ""
+    max_kb: int = 1024
+
+
+@router.post("/write")
+def write_text(body: WriteIn) -> JSONResponse:
+    """Overwrite a text file. Refuses dirs, symlinks, and files over the cap."""
+    try:
+        p = Path(body.path)
+        if not p.is_file() or p.is_symlink():
+            return JSONResponse({"error": "not a plain file"}, status_code=400)
+        if (g := _guard_root(p)):
+            return g
+        cap = max(1, min(body.max_kb or 1024, 1024)) * 1024
+        if p.stat().st_size > cap:
+            return JSONResponse({"error": "file too large to edit here"}, status_code=413)
+        data = (body.text or "").encode("utf-8")
+        if len(data) > cap:
+            return JSONResponse({"error": "new content too large"}, status_code=413)
+        p.write_bytes(data)
+        return JSONResponse({"ok": True, "path": str(p),
+                             "size": len(data), "mtime": p.stat().st_mtime})
+    except PermissionError:
+        return JSONResponse({"error": "access denied"}, status_code=403)
+    except Exception as e:
+        return JSONResponse({"error": str(e)[:200]}, status_code=500)
+
+
+class MkfileIn(BaseModel):
+    parent: str = ""
+    name: str = ""
+
+
+@router.post("/mkfile")
+def mkfile(body: MkfileIn) -> JSONResponse:
+    """Create an empty file. Auto-numbers when the name is taken."""
+    name = _clean_name(body.name)
+    if not name or any(c in name for c in BAD_NAME_CHARS):
+        return JSONResponse({"error": "bad name"}, status_code=400)
+    try:
+        parent = Path(body.parent)
+        if not parent.is_dir():
+            return JSONResponse({"error": "bad parent"}, status_code=400)
+        target = _free_path(parent / name)
+        target.touch(exist_ok=False)
+        return JSONResponse({"ok": True, "path": str(target)})
+    except FileExistsError:
+        return JSONResponse({"error": "already exists"}, status_code=409)
+    except PermissionError:
+        return JSONResponse({"error": "access denied"}, status_code=403)
+    except Exception as e:
+        return JSONResponse({"error": str(e)[:200]}, status_code=500)
+
+
+class WatchIn(BaseModel):
+    path: str = ""
+
+
+@router.post("/watch")
+def watch_dir(body: WatchIn) -> JSONResponse:
+    """Cheap change fingerprint for auto-refresh: dir mtime + child count.
+
+    No per-file stats, so polling every few seconds stays cheap even in
+    huge folders. The frontend refetches /list only when this changes.
+    """
+    try:
+        target = Path(body.path) if body.path else Path.home()
+        if not target.is_dir():
+            return JSONResponse({"error": "not a folder"}, status_code=400)
+        try:
+            with os.scandir(target) as it:
+                count = sum(1 for _ in it)
+        except (PermissionError, FileNotFoundError, OSError):
+            return JSONResponse({"error": "access denied"}, status_code=403)
+        return JSONResponse({"ok": True, "path": str(target),
+                             "fingerprint": f"{target.stat().st_mtime_ns}:{count}"})
+    except Exception as e:
+        return JSONResponse({"error": str(e)[:200]}, status_code=500)
+
+
+class SearchIn(BaseModel):
+    root: str = ""
+    query: str = ""
+    show_hidden: bool = False
+    max_results: int = 200
+    max_depth: int = 8
+
+
+@router.post("/search")
+def search_files(body: SearchIn) -> JSONResponse:
+    """Recursive filename search under root. Name matches only (no content).
+
+    Bounded: max_results (cap 1000), max_depth (cap 12), and a dir-scan
+    budget so a drive-root search can't hang the gateway. Symlinked dirs
+    are matched by name but never descended into (loop-proof).
+    """
+    q = (body.query or "").strip().lower()
+    if len(q) < 2:
+        return JSONResponse({"error": "query too short"}, status_code=400)
+    try:
+        root = Path(body.root)
+        if not root.is_dir():
+            return JSONResponse({"error": "bad root"}, status_code=400)
+    except Exception:
+        return JSONResponse({"error": "bad root"}, status_code=400)
+    max_results = max(1, min(body.max_results or 200, 1000))
+    max_depth = max(0, min(body.max_depth or 8, 12))
+    dir_budget = 20000
+    out: List[Dict[str, Any]] = []
+    truncated = False
+    try:
+        stack = [(str(root), 0)]
+        while stack and len(out) < max_results:
+            cur, depth = stack.pop()
+            if dir_budget <= 0:
+                truncated = True
+                break
+            dir_budget -= 1
+            try:
+                with os.scandir(cur) as it:
+                    children = list(it)
+            except (PermissionError, FileNotFoundError, OSError):
+                continue
+            for scan in children:
+                try:
+                    is_dir = scan.is_dir(follow_symlinks=False)
+                except Exception:
+                    continue
+                e = _entry(scan, body.show_hidden)
+                if e is None:
+                    continue
+                if q in scan.name.lower():
+                    out.append(e)
+                    if len(out) >= max_results:
+                        truncated = True
+                        break
+                if is_dir and depth < max_depth:
+                    try:
+                        if not os.path.islink(scan.path):
+                            stack.append((scan.path, depth + 1))
+                    except Exception:
+                        pass
+        return JSONResponse({"ok": True, "root": str(root), "query": body.query,
+                             "entries": out, "total": len(out),
+                             "truncated": truncated})
+    except Exception as e:
+        return JSONResponse({"error": str(e)[:200]}, status_code=500)
+
+
+@router.get("/health")
+def health() -> Dict[str, Any]:
+    return {"ok": True}
 def _trash_parse_i(data: bytes) -> Optional[Dict[str, Any]]:
     """Parse a $I recycle-bin metadata file: size + deleted time + original path."""
     import struct

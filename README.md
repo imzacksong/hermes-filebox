@@ -28,6 +28,13 @@ confirms) and **Compress** into one zip. Right-click copy/cut/compress
 act on the whole selection when the clicked file is in it. Dragging a
 selection into a folder moves all of it.
 
+Keyboard: arrows move the cursor, `Shift`+arrows extends the range,
+`F2` renames, `Del` deletes (with confirm), `Enter` opens, `Esc`
+clears. The folder view refreshes itself every few seconds when files
+change elsewhere. The status bar has **+ New folder** and **+ New
+file** (a new file opens straight into rename), and right-click →
+**Duplicate** copies in place with an auto-numbered name.
+
 ## Recycle Bin
 
 The sidebar has a **Recycle Bin** entry: deleted files and folders with
@@ -54,6 +61,8 @@ go to the bin, never vanish.
    the **FileBox** chip bottom-right. Drag it to the right side and close the
    built-in files pane if you want it as your sidebar.
 
+.
+
 ## Self-updates
 
 The tab strip shows the installed version. FileBox checks
@@ -73,7 +82,8 @@ Select anything and the preview panel grows an ops bar up top: **Copy path**,
 **Rename** (inline, Enter to save), **Copy** / **Cut** / **Paste**,
 **Delete** (second click confirms), **Compress**, and **Extract here** on
 zips. Right-click any tile for the same ops in a context menu (paste targets
-the folder you clicked, or the current folder). The preview panel resizes by
+the folder you clicked, or the current folder). Text files under 256 KB
+show an **Edit** button — change the text, **Save**, done. The preview panel resizes by
 dragging its top edge and closes with the `×` in the ops bar (clicking the
 file again still toggles it). The bottom row stays lean:
 Open, Show in Explorer.
