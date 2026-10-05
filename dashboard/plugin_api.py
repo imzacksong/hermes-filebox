@@ -409,9 +409,13 @@ def make_zip(body: ZipIn) -> JSONResponse:
                 if not src.exists():
                     continue
                 if src.is_dir() and not src.is_symlink():
-                    for root, _, files in os.walk(src):
+                    for root, dirs, files in os.walk(src):
+                        rp = Path(root)
+                        if not dirs and not files:
+                            # zip has no implicit dir entries — keep empty dirs
+                            z.writestr(str(rp.relative_to(parent)) + "/", "")
                         for fn in files:
-                            fp = Path(root) / fn
+                            fp = rp / fn
                             z.write(fp, fp.relative_to(parent))
                 else:
                     z.write(src, src.name)
@@ -438,7 +442,17 @@ def extract_zip(body: ExtractIn) -> JSONResponse:
             return JSONResponse({"error": "destination blocked"}, status_code=409)
         dest = _free_path(dest) if dest.exists() else dest
         dest.mkdir(parents=True, exist_ok=True)
+        dest_resolved = dest.resolve()
         with zipfile.ZipFile(src, "r") as z:
+            for m in z.infolist():
+                # zip-slip guard: every member must land inside dest
+                target = dest / m.filename
+                try:
+                    resolved = target.resolve()
+                except Exception:
+                    return JSONResponse({"error": "bad archive entry"}, status_code=400)
+                if resolved != dest_resolved and dest_resolved not in resolved.parents:
+                    return JSONResponse({"error": "archive has unsafe paths"}, status_code=400)
             z.extractall(dest)
         return JSONResponse({"ok": True, "path": str(dest)})
     except PermissionError:
@@ -608,6 +622,7 @@ def health() -> Dict[str, Any]:
     return {"ok": True}
 
 
+# === FILEBOX-UPDATER-START === (stripped in catalog builds; keep this block last-safe: nothing below may be updater code)
 UPDATE_REPO = os.environ.get("FILEBOX_UPDATE_REPO", "imzacksong/hermes-filebox")
 UPDATE_BRANCH = os.environ.get("FILEBOX_UPDATE_BRANCH", "main")
 PLUGIN_ROOT = Path(__file__).resolve().parent.parent
@@ -758,6 +773,8 @@ def update_plugin() -> Dict[str, Any]:
     except Exception as e:
         return JSONResponse({"ok": False, "error": str(e)[:200]}, status_code=500)
 
+
+# === FILEBOX-UPDATER-END ===
 
 def _trash_parse_i(data: bytes) -> Optional[Dict[str, Any]]:
     """Parse a $I recycle-bin metadata file: size + deleted time + original path."""

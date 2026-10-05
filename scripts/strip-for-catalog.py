@@ -28,12 +28,17 @@ README = ROOT / "README.md"
 
 def strip_backend() -> None:
     src = BACKEND.read_text(encoding="utf-8")
-    # Updater block runs from the UPDATE_REPO constant to end of file.
-    idx = src.find('UPDATE_REPO = os.environ.get("FILEBOX_UPDATE_REPO"')
-    if idx < 0:
-        print("backend: no updater block (already stripped?)")
-        return
-    src = src[:idx].rstrip() + "\n"
+    # Cut only the delimited updater block. The old to-EOF cut once ate the
+    # trash + OS-clipboard endpoints appended after the updater — the
+    # frontend still calls them, so the catalog build 404'd. Markers make
+    # that impossible: anything outside them survives by construction.
+    start = src.find("# === FILEBOX-UPDATER-START ===")
+    end = src.find("# === FILEBOX-UPDATER-END ===")
+    if start < 0 or end < 0 or end < start:
+        print("backend: updater markers missing — refusing to strip")
+        sys.exit(1)
+    end = src.find("\n", end) + 1
+    src = src[:start].rstrip() + "\n" + src[end:].lstrip("\n")
     # Imports only the updater used.
     src = re.sub(r"^import json\n", "", src, flags=re.M)
     src = re.sub(r"^import time\n", "", src, flags=re.M)
@@ -44,6 +49,10 @@ def strip_backend() -> None:
               if getattr(getattr(d, "func", None), "attr", "") in ("get", "post")]
     assert "/update-check" not in routes and "/update" not in routes, routes
     assert "UPDATE_REPO" not in src and "tarfile" not in src
+    # Contract: every endpoint the frontend calls must still exist.
+    for must in ("/trash", "/trash-empty", "/trash-restore", "/copy-out",
+                 "/paste-os", "/dl", "/list", "/read", "/thumb"):
+        assert must in routes, f"strip ate {must}: {routes}"
     print(f"backend: stripped, {len(routes)} routes left")
 
 
