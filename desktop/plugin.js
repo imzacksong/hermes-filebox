@@ -572,6 +572,7 @@ function Preview({ ctx, t, entry, refetch, select }) {
       jsx(Button, { size: 'micro', variant: 'ghost', onClick: doDelete, disabled: opBusy, children: confirmDel ? t('confirmDelete') : t('delete') }),
       jsx(Button, { size: 'micro', variant: 'ghost', onClick: doZip, disabled: opBusy, children: t('compress') }),
       entry.ext === '.zip' && jsx(Button, { size: 'micro', variant: 'ghost', onClick: doExtract, disabled: opBusy, children: t('extract') }),
+      canEdit && !editMode && jsx(Button, { size: 'micro', variant: 'ghost', onClick: startEdit, children: t('editFile') }),
       jsx('span', { style: { flex: 1 } }),
       jsx('button', { className: 'hermes-fb-tbtn', style: { width: 20, height: 20, fontSize: 12 }, title: t('closePreview'), onClick: () => select(null), children: '×' }),
     ] }),
@@ -589,19 +590,13 @@ function Preview({ ctx, t, entry, refetch, select }) {
       ? jsx('div', { className: 'hermes-fb-error', children: t('binaryFile') })
       : jsxs('div', { children: [
         jsx('pre', { children: (text.data.text || '') + (text.data.truncated ? '…' : '') }),
-        jsxs('div', { className: 'hermes-fb-actions', children: [
-          text.data.truncated && jsx(Button, { size: 'micro', variant: 'ghost', onClick: () => setFullRead(true), children: t('readFull') }),
-          canEdit && !fullRead && jsx(Button, { size: 'micro', variant: 'ghost', onClick: startEdit, children: t('editFile') }),
-        ] }),
+        text.data.truncated && jsx(Button, { size: 'micro', variant: 'ghost', onClick: () => setFullRead(true), children: t('readFull') }),
       ] })),
     isTextish && fullRead && !editMode && jsxs('div', { children: [
       full.isFetching && jsx(GlyphSpinner, { ariaLabel: t('readFull') }),
       full.data && !full.data.is_binary && jsx('pre', { children: (full.data.text || '') + (full.data.truncated ? '…' : '') }),
       full.data && full.data.is_binary && jsx('div', { className: 'hermes-fb-error', children: t('binaryFile') }),
-      jsxs('div', { className: 'hermes-fb-actions', children: [
-        jsx(Button, { size: 'micro', variant: 'ghost', onClick: () => setFullRead(false), children: t('showLess') }),
-        canEdit && jsx(Button, { size: 'micro', variant: 'ghost', onClick: startEdit, children: t('editFile') }),
-      ] }),
+      jsx(Button, { size: 'micro', variant: 'ghost', onClick: () => setFullRead(false), children: t('showLess') }),
     ] }),
     isTextish && editMode && jsxs('div', { children: [
       jsx('textarea', { value: editText, onChange: e => setEditText(e.target.value), spellCheck: false, style: { width: '100%', minHeight: 220, fontSize: 11, lineHeight: '15px', fontFamily: 'inherit', whiteSpace: 'pre', background: 'transparent', color: 'var(--ui-text-primary)', border: '1px solid var(--ui-stroke-secondary)', borderRadius: 6, padding: 6, marginTop: 4 } }),
