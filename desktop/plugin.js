@@ -49,6 +49,9 @@ const EN = {
   quickAccess: 'Quick access',
   thisPC: 'This PC',
   searchFiles: 'Search this folder…',
+  searchDeep: (n, folder) => `🔍 ${n} found under ${folder} — double-click a folder to go there`,
+  searchMore: 'Showing first results — refine to narrow',
+  searchingSub: 'Searching subfolders…',
   back: 'Back', fwd: 'Forward', up: 'Up', refresh: 'Refresh', home: 'Home',
   newFolder: 'New folder', create: 'Create', cancel: 'Cancel',
   showHidden: 'Show hidden files',
@@ -644,6 +647,15 @@ function TabPane({ ctx, tabId, initialCwd, sort, setSort, tilePx, setTilePx, sho
   const anchorRef = useRef(null)
   const clearSel = () => { setSel([]); anchorRef.current = null }
   const [search, setSearch] = useState('')
+  // Debounced deep search: 2+ chars searches filenames under cwd recursively.
+  // The instant filter still applies immediately; deep results replace it on arrival.
+  const [deepQ, setDeepQ] = useState('')
+  useEffect(() => {
+    const q = search.trim()
+    if (q.length < 2 || cwd === 'trash://') { setDeepQ(''); return }
+    const id = setTimeout(() => setDeepQ(q), 350)
+    return () => clearTimeout(id)
+  }, [search, cwd])
   const [pins, setPins] = useState(() => ctx.storage.get('pins', null))
   const [mkdirMode, setMkdirMode] = useState(false)
   const [mkdirName, setMkdirName] = useState('')
@@ -675,6 +687,14 @@ function TabPane({ ctx, tabId, initialCwd, sort, setSort, tilePx, setTilePx, sho
     retry: false,
   })
   const isTrash = cwd === 'trash://'
+  const deepActive = !isTrash && deepQ.length >= 2
+  const deep = useQuery({
+    queryKey: [ID, 'search', cwd, deepQ, showHidden],
+    queryFn: ({ signal }) => ctx.rest('/search', { method: 'POST', timeoutMs: 60000, signal, body: { root: cwd, query: deepQ, show_hidden: showHidden } }),
+    enabled: !!cwd && deepActive,
+    staleTime: 30000,
+    retry: false,
+  })
   const [emptyConfirm, setEmptyConfirm] = useState(false)
   const doEmptyTrash = async () => {
     if (!emptyConfirm) { setEmptyConfirm(true); return }
@@ -719,9 +739,11 @@ function TabPane({ ctx, tabId, initialCwd, sort, setSort, tilePx, setTilePx, sho
   }
 
   const entries = useMemo(() => {
-    const all = list.data?.entries ?? []
+    // Deep results replace the folder filter once they arrive; until then
+    // the instant filter covers the current folder with zero latency.
+    const all = (deepActive && deep.data?.entries) ? deep.data.entries : (list.data?.entries ?? [])
     const q = search.trim().toLowerCase()
-    const filtered = q ? all.filter(e => e.name.toLowerCase().includes(q)) : all
+    const filtered = (deepActive && deep.data?.entries) ? all : (q ? all.filter(e => e.name.toLowerCase().includes(q)) : all)
     const cmp = {
       name: (a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }),
       size: (a, b) => (b.size - a.size) || a.name.localeCompare(b.name),
@@ -729,9 +751,10 @@ function TabPane({ ctx, tabId, initialCwd, sort, setSort, tilePx, setTilePx, sho
       type: (a, b) => (a.ext.localeCompare(b.ext)) || a.name.localeCompare(b.name),
     }[sort] || ((a, b) => 0)
     return [...filtered].sort((a, b) => ((b.is_dir ? 1 : 0) - (a.is_dir ? 1 : 0)) || cmp(a, b))
-  }, [list.data, search, sort])
+  }, [list.data, search, sort, deepActive, deep.data])
 
-  const total = list.data?.total ?? entries.length
+  const deepShowing = deepActive && !!deep.data?.entries
+  const total = deepShowing ? (deep.data.total ?? entries.length) : (list.data?.total ?? entries.length)
   const shown = entries.slice(0, RENDER_CAP)
   const crumbs = isTrash ? ['Recycle Bin'] : (cwd ? splitPath(cwd) : [])
   const selEntry = sel.length === 1 ? entries.find(e => e.path === sel[0]) : null
@@ -1088,6 +1111,11 @@ function TabPane({ ctx, tabId, initialCwd, sort, setSort, tilePx, setTilePx, sho
         }),
       ] }),
       total > shown.length && jsx('div', { className: 'hermes-fb-status', children: t('showingFirst', shown.length, total) }),
+      deepActive && deep.isFetching && !deepShowing && jsx('div', { className: 'hermes-fb-status', children: t('searchingSub') }),
+      deepShowing && jsx('div', { className: 'hermes-fb-status', children: [
+        t('searchDeep', deep.data.total ?? entries.length, tabName(cwd)),
+        deep.data.truncated ? ` · ${t('searchMore')}` : null,
+      ].filter(Boolean).join('') }),
       jsxs('div', { className: 'hermes-fb-status', children: [
         jsx('span', { children: t('items', total) }),
         selEntry && jsx('span', { children: `${selEntry.name} · ${selEntry.is_dir ? '' : `${fmtSize(selEntry.size)} · `}${fmtDate(selEntry.mtime)}` }),
