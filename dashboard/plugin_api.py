@@ -615,6 +615,75 @@ def mkdir(body: MkdirIn) -> JSONResponse:
         return JSONResponse({"error": str(e)[:200]}, status_code=500)
 
 
+class SearchIn(BaseModel):
+    root: str = ""
+    query: str = ""
+    show_hidden: bool = False
+    max_results: int = 200
+    max_depth: int = 8
+
+
+@router.post("/search")
+def search_files(body: SearchIn) -> JSONResponse:
+    """Recursive filename search under root. Name matches only (no content).
+
+    Bounded: max_results (cap 1000), max_depth (cap 12), and a dir-scan
+    budget so a drive-root search can't hang the gateway. Symlinked dirs
+    are matched by name but never descended into (loop-proof).
+    """
+    q = (body.query or "").strip().lower()
+    if len(q) < 2:
+        return JSONResponse({"error": "query too short"}, status_code=400)
+    try:
+        root = Path(body.root)
+        if not root.is_dir():
+            return JSONResponse({"error": "bad root"}, status_code=400)
+    except Exception:
+        return JSONResponse({"error": "bad root"}, status_code=400)
+    max_results = max(1, min(body.max_results or 200, 1000))
+    max_depth = max(0, min(body.max_depth or 8, 12))
+    dir_budget = 20000
+    out: List[Dict[str, Any]] = []
+    truncated = False
+    try:
+        stack = [(str(root), 0)]
+        while stack and len(out) < max_results:
+            cur, depth = stack.pop()
+            if dir_budget <= 0:
+                truncated = True
+                break
+            dir_budget -= 1
+            try:
+                with os.scandir(cur) as it:
+                    children = list(it)
+            except (PermissionError, FileNotFoundError, OSError):
+                continue
+            for scan in children:
+                try:
+                    is_dir = scan.is_dir(follow_symlinks=False)
+                except Exception:
+                    continue
+                e = _entry(scan, body.show_hidden)
+                if e is None:
+                    continue
+                if q in scan.name.lower():
+                    out.append(e)
+                    if len(out) >= max_results:
+                        truncated = True
+                        break
+                if is_dir and depth < max_depth:
+                    try:
+                        if not os.path.islink(scan.path):
+                            stack.append((scan.path, depth + 1))
+                    except Exception:
+                        pass
+        return JSONResponse({"ok": True, "root": str(root), "query": body.query,
+                             "entries": out, "total": len(out),
+                             "truncated": truncated})
+    except Exception as e:
+        return JSONResponse({"error": str(e)[:200]}, status_code=500)
+
+
 @router.get("/health")
 def health() -> Dict[str, Any]:
     return {"ok": True}

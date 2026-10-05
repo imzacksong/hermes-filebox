@@ -15,6 +15,12 @@ Type, click a header to sort). The choice sticks between launches.
 
 ## Selecting files
 
+Type in the search box to filter the current folder instantly. With 2 or
+more characters FileBox also searches filenames in all subfolders (up to
+8 levels deep, 200 results) — deep hits replace the list with a `🔍`
+status line. Double-click a folder result to go there; files open,
+preview, and take every context-menu op in place.
+
 Click selects one. `Ctrl`/`Cmd`-click toggles, `Shift`-click selects a
 range, `Ctrl+A` grabs the whole folder, `Esc` clears. With several
 selected, a batch panel offers **Copy / Cut / Delete** (second click
