@@ -60,7 +60,8 @@ def strip_backend() -> None:
     assert "UPDATE_REPO" not in src and "tarfile" not in src
     # Contract: every endpoint the frontend calls must still exist.
     for must in ("/trash", "/trash-empty", "/trash-restore", "/copy-out",
-                 "/paste-os", "/dl", "/list", "/read", "/thumb"):
+                 "/paste-os", "/dl", "/list", "/read", "/thumb", "/search",
+                 "/write", "/mkfile", "/watch"):
         assert must in routes, f"strip ate {must}: {routes}"
     print(f"backend: stripped, {len(routes)} routes left")
 
