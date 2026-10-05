@@ -28,12 +28,26 @@ README = ROOT / "README.md"
 
 def strip_backend() -> None:
     src = BACKEND.read_text(encoding="utf-8")
-    # Updater block runs from the UPDATE_REPO constant to end of file.
-    idx = src.find('UPDATE_REPO = os.environ.get("FILEBOX_UPDATE_REPO"')
-    if idx < 0:
-        print("backend: no updater block (already stripped?)")
-        return
-    src = src[:idx].rstrip() + "\n"
+    # Cut only the delimited updater block. The old to-EOF cut once ate the
+    # trash + OS-clipboard endpoints appended after the updater — the
+    # frontend still calls them, so the catalog build 404'd. Markers make
+    # that impossible: anything outside them survives by construction.
+    start = src.find("# === FILEBOX-UPDATER-START ===")
+    end = src.find("# === FILEBOX-UPDATER-END ===")
+    if start < 0 or end < 0 or end < start:
+        # Idempotent re-runs: already stripped is fine, but only if the
+        # updater is truly gone (routes tell the truth, markers can lie).
+        tree = ast.parse(src)
+        routes = [d.args[0].value for n in ast.walk(tree)
+                  for d in getattr(n, "decorator_list", [])
+                  if getattr(getattr(d, "func", None), "attr", "") in ("get", "post")]
+        if "/update-check" not in routes and "/update" not in routes:
+            print("backend: already stripped, skipping")
+            return
+        print("backend: updater markers missing — refusing to strip")
+        sys.exit(1)
+    end = src.find("\n", end) + 1
+    src = src[:start].rstrip() + "\n" + src[end:].lstrip("\n")
     # Imports only the updater used.
     src = re.sub(r"^import json\n", "", src, flags=re.M)
     src = re.sub(r"^import time\n", "", src, flags=re.M)
@@ -44,14 +58,23 @@ def strip_backend() -> None:
               if getattr(getattr(d, "func", None), "attr", "") in ("get", "post")]
     assert "/update-check" not in routes and "/update" not in routes, routes
     assert "UPDATE_REPO" not in src and "tarfile" not in src
+    # Contract: every endpoint the frontend calls must still exist.
+    for must in ("/trash", "/trash-empty", "/trash-restore", "/copy-out",
+                 "/paste-os", "/dl", "/list", "/read", "/thumb"):
+        assert must in routes, f"strip ate {must}: {routes}"
     print(f"backend: stripped, {len(routes)} routes left")
 
 
 def strip_frontend() -> None:
     src = FRONTEND.read_text(encoding="utf-8")
-    m = re.search(r"\nfunction UpdateChip\(\{ ctx, t \}\).*?\n\}\n\nfunction Explorer",
+    m = re.search(r"\nfunction UpdateChip\(\{ ctx, t \}\).*?\n}\n\nfunction Explorer",
                   src, flags=re.S)
-    assert m, "UpdateChip block not found"
+    if not m:
+        if "UpdateChip" not in src and "update-check" not in src:
+            print("frontend: already stripped, skipping")
+            return
+        print("frontend: UpdateChip block not found — refusing to strip")
+        sys.exit(1)
     src = src[:m.start()] + "\nfunction Explorer" + src[m.end():]
     src = src.replace("      jsx(UpdateChip, { ctx, t }),\n", "")
     for line in ("  updateTo: v => `Update to v${v}`,\n",
@@ -73,7 +96,12 @@ def strip_frontend() -> None:
 def strip_readme() -> None:
     src = README.read_text(encoding="utf-8")
     m = re.search(r"\n## Self-updates\n.*?\n(?=## )", src, flags=re.S)
-    assert m, "Self-updates section not found"
+    if not m:
+        if "Self-updates" not in src and "update-check" not in src:
+            print("readme: already stripped, skipping")
+            return
+        print("readme: Self-updates section not found — refusing to strip")
+        sys.exit(1)
     src = src[:m.start()] + "\n" + src[m.end() - len("## "):]
     README.write_text(src, encoding="utf-8")
     assert "Self-updates" not in src and "update-check" not in src
