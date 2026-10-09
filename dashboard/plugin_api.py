@@ -1,6 +1,6 @@
 """Filebox backend — local filesystem reads AND writes for the Explorer-style pane.
 
-Mounted at /api/plugins/filebox/. Localhost only, same trust as the terminal:
+Mounted at /api/plugins/hermes-filebox/. Localhost only, same trust as the terminal:
 reads anything the user could `dir`, writes anything they could do in Explorer
 (rename/copy/move/delete/mkdir/zip/extract). Delete goes to the recycle bin
 (send2trash); the UI still confirms first.
@@ -18,7 +18,6 @@ import zipfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-import psutil
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -53,7 +52,7 @@ class MediaIn(BaseModel):
     size: int = 256
 
 
-THUMB_CACHE_DIR = Path(tempfile.gettempdir()) / "filebox-thumbs"
+THUMB_CACHE_DIR = Path(tempfile.gettempdir()) / "hermes-filebox-thumbs"
 THUMB_CACHE_MAX_FILES = 2000
 THUMB_CACHE_MAX_BYTES = 500 * 1024 * 1024
 
@@ -113,6 +112,8 @@ def _thumb_put(key: Optional[str], data: bytes) -> None:
 def videothumb(body: MediaIn) -> JSONResponse:
     if Path(body.path).suffix.lower() not in VIDEO_EXTS:
         return JSONResponse({"error": "not a video"}, status_code=400)
+    if (d := _deny_secret(Path(body.path))):
+        return d
     ff = shutil.which("ffmpeg")
     if not ff:
         return JSONResponse({"error": "ffmpeg missing"}, status_code=501)
@@ -159,6 +160,8 @@ class RawIn(BaseModel):
 
 @router.post("/raw")
 def raw_bytes(body: RawIn) -> JSONResponse:
+    if (d := _deny_secret(Path(body.path))):
+        return d
     try:
         cap = max(1, min(body.max_mb, 96)) * 1024 * 1024
         with open(body.path, "rb") as f:
@@ -284,6 +287,8 @@ def modelthumb(body: MediaIn) -> JSONResponse:
     if ext not in MODEL_EXTS:
         return JSONResponse({"error": "not a model"}, status_code=400)
     size = max(32, min(body.size, 512))
+    if (d := _deny_secret(Path(body.path))):
+        return d
     try:
         key = _thumb_key(body.path, "model", size)
         hit = _thumb_get(key)
@@ -342,6 +347,62 @@ def _guard_root(p: Path) -> Optional[JSONResponse]:
     return None
 
 
+# --- Secret-file deny (catalog requirement) ---
+# Refuse reads/writes under ~/.ssh and under Hermes' own secret files, even
+# though the backend runs as the user. Symlinks are resolved first so a
+# link pointing at a secret can't sneak through. Everything else on disk
+# stays browsable — same trust as the terminal, minus the keys.
+_SECRET_NAMES = {
+    "config.yaml", "config.yml", ".env",
+    "secrets.json", "credentials.json", "token", ".token",
+}
+_SECRET_SUFFIXES = {".pem", ".key"}
+
+
+def _hermes_home_dirs() -> List[Path]:
+    cands = []
+    env = os.environ.get("HERMES_HOME")
+    if env:
+        cands.append(Path(env))
+    cands += [
+        Path.home() / ".hermes",
+        Path.home() / "AppData" / "Local" / "hermes",
+        Path.home() / ".config" / "hermes",
+    ]
+    out = []
+    for c in cands:
+        try:
+            if c.is_dir():
+                out.append(c.resolve())
+        except Exception:
+            pass
+    return out
+
+
+_HERMES_DIRS = _hermes_home_dirs()
+
+
+def _deny_secret(p: Path) -> Optional[JSONResponse]:
+    """Return a 403 response if p resolves into ~/.ssh or a Hermes secret."""
+    try:
+        rp = Path(os.path.realpath(p))
+    except Exception:
+        return JSONResponse({"error": "bad path"}, status_code=400)
+    try:
+        ssh = Path.home().resolve() / ".ssh"
+    except Exception:
+        ssh = Path.home() / ".ssh"
+    if rp == ssh or ssh in rp.parents:
+        return JSONResponse({"error": "refusing ~/.ssh"}, status_code=403)
+    for hd in _HERMES_DIRS:
+        if rp == hd or hd in rp.parents:
+            n = rp.name.lower()
+            if n in _SECRET_NAMES or rp.suffix.lower() in _SECRET_SUFFIXES:
+                return JSONResponse(
+                    {"error": "refusing Hermes secret file"}, status_code=403)
+    return None
+
+
 class RenameIn(BaseModel):
     path: str = ""
     new_name: str = ""
@@ -358,6 +419,8 @@ def rename(body: RenameIn) -> JSONResponse:
             return JSONResponse({"error": "not found"}, status_code=404)
         if (g := _guard_root(src)):
             return g
+        if (d := _deny_secret(src)):
+            return d
         dst = src.parent / name
         if dst.exists():
             return JSONResponse({"error": "already exists"}, status_code=409)
@@ -381,12 +444,17 @@ def _paste(op: str, body: OpIn) -> JSONResponse:
         dest = Path(body.dest_dir)
         if not dest.is_dir():
             return JSONResponse({"error": "bad destination"}, status_code=400)
+        if (d := _deny_secret(dest)):
+            return d
         done, failed = [], []
         for raw in body.paths:
             try:
                 src = Path(raw)
                 if not src.exists():
                     failed.append({"path": raw, "error": "not found"})
+                    continue
+                if (d := _deny_secret(src)):
+                    failed.append({"path": raw, "error": "forbidden path"})
                     continue
                 if op == "move" and (g := _guard_root(src)):
                     failed.append({"path": raw, "error": "drive root"})
@@ -448,6 +516,9 @@ def delete(body: DeleteIn) -> JSONResponse:
             if (g := _guard_root(p)):
                 failed.append({"path": raw, "error": "drive root"})
                 continue
+            if (d := _deny_secret(p)):
+                failed.append({"path": raw, "error": "forbidden path"})
+                continue
             send2trash(str(p))
             done.append(raw)
         except PermissionError:
@@ -472,6 +543,9 @@ def make_zip(body: ZipIn) -> JSONResponse:
         base = _clean_name(body.name) or (first.stem if len(body.paths) == 1 else "archive")
         if any(c in base for c in BAD_NAME_CHARS):
             return JSONResponse({"error": "bad name"}, status_code=400)
+        for raw in body.paths:
+            if (d := _deny_secret(Path(raw))):
+                return d
         if not base.lower().endswith(".zip"):
             base += ".zip"
         zpath = _free_path(parent / base)
@@ -509,10 +583,14 @@ def extract_zip(body: ExtractIn) -> JSONResponse:
         src = Path(body.path)
         if not src.is_file() or src.suffix.lower() != ".zip":
             return JSONResponse({"error": "not a zip"}, status_code=400)
+        if (d := _deny_secret(src)):
+            return d
         dest = Path(body.dest_dir) if body.dest_dir else src.parent / src.stem
         if dest.exists() and not dest.is_dir():
             return JSONResponse({"error": "destination blocked"}, status_code=409)
         dest = _free_path(dest) if dest.exists() else dest
+        if (d := _deny_secret(dest)):
+            return d
         dest.mkdir(parents=True, exist_ok=True)
         dest_resolved = dest.resolve()
         with zipfile.ZipFile(src, "r") as z:
@@ -579,26 +657,33 @@ def _entry(scan: os.DirEntry, show_hidden: bool) -> Optional[Dict[str, Any]]:
 def roots() -> Dict[str, Any]:
     drives = []
     try:
-        for part in psutil.disk_partitions(all=False):
-            try:
-                u = psutil.disk_usage(part.mountpoint)
-                drives.append({
-                    "device": part.device,
-                    "mount": part.mountpoint,
-                    "fstype": part.fstype,
-                    "percent": u.percent,
-                    "total_gb": round(u.total / (1024 ** 3), 1),
-                })
-            except Exception:
-                pass
+        import psutil
     except Exception:
-        pass
+        psutil = None
+    if psutil is not None:
+        try:
+            for part in psutil.disk_partitions(all=False):
+                try:
+                    u = psutil.disk_usage(part.mountpoint)
+                    drives.append({
+                        "device": part.device,
+                        "mount": part.mountpoint,
+                        "fstype": part.fstype,
+                        "percent": u.percent,
+                        "total_gb": round(u.total / (1024 ** 3), 1),
+                    })
+                except Exception:
+                    pass
+        except Exception:
+            pass
     return {"home": str(Path.home()), "drives": drives}
 
 
 @router.post("/list")
 def list_dir(body: PathIn) -> JSONResponse:
     target = body.path or str(Path.home())
+    if (d := _deny_secret(Path(target))):
+        return d
     try:
         entries: List[Dict[str, Any]] = []
         total = 0
@@ -623,6 +708,8 @@ def list_dir(body: PathIn) -> JSONResponse:
 
 @router.post("/read")
 def read_text(body: ReadIn) -> JSONResponse:
+    if (d := _deny_secret(Path(body.path))):
+        return d
     try:
         cap = max(1, min(body.max_kb, 1024)) * 1024
         with open(body.path, "rb") as f:
@@ -649,6 +736,8 @@ def read_text(body: ReadIn) -> JSONResponse:
 
 @router.post("/thumb")
 def thumb(body: ThumbIn) -> JSONResponse:
+    if (d := _deny_secret(Path(body.path))):
+        return d
     try:
         if Path(body.path).suffix.lower() not in IMAGE_EXTS:
             return JSONResponse({"error": "not an image"}, status_code=400)
@@ -686,6 +775,8 @@ def mkdir(body: MkdirIn) -> JSONResponse:
         return JSONResponse({"error": "bad name"}, status_code=400)
     try:
         target = Path(body.parent) / name
+        if (d := _deny_secret(target)):
+            return d
         target.mkdir(parents=False, exist_ok=False)
         return JSONResponse({"ok": True, "path": str(target)})
     except FileExistsError:
@@ -709,6 +800,8 @@ def write_text(body: WriteIn) -> JSONResponse:
             return JSONResponse({"error": "not a plain file"}, status_code=400)
         if (g := _guard_root(p)):
             return g
+        if (d := _deny_secret(p)):
+            return d
         cap = max(1, min(body.max_kb or 1024, 1024)) * 1024
         if p.stat().st_size > cap:
             return JSONResponse({"error": "file too large to edit here"}, status_code=413)
@@ -739,6 +832,8 @@ def mkfile(body: MkfileIn) -> JSONResponse:
         parent = Path(body.parent)
         if not parent.is_dir():
             return JSONResponse({"error": "bad parent"}, status_code=400)
+        if (d := _deny_secret(parent)):
+            return d
         target = _free_path(parent / name)
         target.touch(exist_ok=False)
         return JSONResponse({"ok": True, "path": str(target)})
@@ -763,6 +858,8 @@ def watch_dir(body: WatchIn) -> JSONResponse:
     """
     try:
         target = Path(body.path) if body.path else Path.home()
+        if (d := _deny_secret(target)):
+            return d
         if not target.is_dir():
             return JSONResponse({"error": "not a folder"}, status_code=400)
         try:
@@ -801,6 +898,8 @@ def search_files(body: SearchIn) -> JSONResponse:
             return JSONResponse({"error": "bad root"}, status_code=400)
     except Exception:
         return JSONResponse({"error": "bad root"}, status_code=400)
+    if (d := _deny_secret(root)):
+        return d
     max_results = max(1, min(body.max_results or 200, 1000))
     max_depth = max(0, min(body.max_depth or 8, 12))
     dir_budget = 20000
@@ -1001,6 +1100,8 @@ def trash_restore(body: TrashRestoreIn) -> Dict[str, Any]:
         if rfile is None:
             return JSONResponse({"ok": False, "error": "backing file gone"}, status_code=410)
         dest = Path(it["orig"])
+        if (d := _deny_secret(dest)):
+            return d
         try:
             if not dest.parent.is_dir():
                 return JSONResponse(
@@ -1052,6 +1153,8 @@ def download_file(path: str = ""):
         p = Path(path)
         if not path or not p.is_file():
             return JSONResponse({"ok": False, "error": "file only"}, status_code=400)
+        if (d := _deny_secret(p)):
+            return d
         return FileResponse(str(p), filename=p.name)
     except Exception as e:
         return JSONResponse({"ok": False, "error": str(e)[:200]}, status_code=500)
@@ -1068,6 +1171,9 @@ def copy_out(body: CopyOutIn) -> Dict[str, Any]:
              if p and not p.startswith("trash://") and os.path.exists(p)]
     if not paths:
         return JSONResponse({"ok": False, "error": "nothing to copy"}, status_code=400)
+    for p in paths:
+        if _deny_secret(Path(p)):
+            return JSONResponse({"ok": False, "error": "forbidden path"}, status_code=403)
     try:
         arr = ",".join(_ps_quote(p) for p in paths)
         cmd = ("Add-Type -AssemblyName System.Windows.Forms; "

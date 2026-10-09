@@ -1,5 +1,5 @@
 /**
- * Filebox — desktop half of the unified filebox package.
+ * Hermes-Filebox — desktop half of the unified hermes-filebox package.
  * Windows-Explorer-style pane: quick access, breadcrumbs, icon grid,
  * search, preview, mkdir. Enable in Settings → Plugins.
  *
@@ -12,7 +12,7 @@ import {
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { jsx, jsxs } from 'react/jsx-runtime'
 
-const ID = 'filebox'
+const ID = 'hermes-filebox'
 const RENDER_CAP = 800
 const collapsed = atom(true)
 const clipboard = atom(null)
@@ -21,7 +21,7 @@ const pendingDelete = atom(null)
 const dirBump = atom(0)
 
 function hasFbPaths(ev) {
-  try { return Array.from(ev.dataTransfer?.types || []).includes('application/x-filebox-paths') } catch { return false }
+  try { return Array.from(ev.dataTransfer?.types || []).includes('application/x-hermes-filebox-paths') } catch { return false }
 }
 
 function parentDir(p) {
@@ -37,7 +37,7 @@ function syncPane() {
   const open = !collapsed.get()
   if (open && !paneDispose) {
     try { paneDispose = paneRegister() } catch { /* noop */ }
-    try { if (host && typeof host.revealPane === 'function') host.revealPane('filebox:filebox-pane') } catch { /* noop */ }
+    try { if (host && typeof host.revealPane === 'function') host.revealPane('hermes-filebox:hermes-filebox-pane') } catch { /* noop */ }
   } else if (!open && paneDispose) {
     try { paneDispose() } catch { /* noop */ }
     paneDispose = null
@@ -65,7 +65,7 @@ const EN = {
   items: n => `${n} item${n === 1 ? '' : 's'}`,
   showingFirst: (a, b) => `Showing ${a} of ${b} — refine search`,
   emptyFolder: 'Empty folder.',
-  backendDown: 'Backend unreachable — enable filebox and restart the gateway.',
+  backendDown: 'Backend unreachable — enable hermes-filebox and restart the gateway.',
   sortBy: 'Sort',
   sortName: 'Name', sortSize: 'Size', sortDate: 'Modified', sortType: 'Type',
   preview: 'Preview', details: 'Details',
@@ -260,7 +260,7 @@ function fileUrl(path) {
 function fileDlUrl(path) {
   // Same-origin backend stream for <audio>/<video> when file:// is blocked.
   const base = (typeof window !== 'undefined' && window.location && window.location.origin) || ''
-  return `${base}/api/plugins/filebox/dl?path=${encodeURIComponent(path)}`
+  return `${base}/api/plugins/hermes-filebox/dl?path=${encodeURIComponent(path)}`
 }
 
 function parseModel(ext, bytes) {
@@ -662,7 +662,7 @@ function dlUrl(path, name) {
   const ext = String(name).split('.').pop().toLowerCase()
   const mime = MIME_BY_EXT[ext] || 'application/octet-stream'
   const base = (typeof window !== 'undefined' && window.location && window.location.origin) || ''
-  return `${mime}:${name}:${base}/api/plugins/filebox/dl?path=${encodeURIComponent(path)}`
+  return `${mime}:${name}:${base}/api/plugins/hermes-filebox/dl?path=${encodeURIComponent(path)}`
 }
 
 function TabPane({ ctx, tabId, initialCwd, sort, setSort, tilePx, setTilePx, showHidden, setShowHidden, sideWidth, setSideWidth, sideCollapsed, setSideCollapsed, sideOrder, setSideOrder, previewH, setPreviewH, viewMode, setViewMode, hidden }) {
@@ -824,9 +824,9 @@ function TabPane({ ctx, tabId, initialCwd, sort, setSort, tilePx, setTilePx, sho
     ids.splice(at < 0 ? ids.length : at, 0, fromId)
     setSideOrder(ids)
   }
-  const sideDragStart = id => ev => { try { ev.dataTransfer.setData('application/x-filebox-side', id) } catch {} try { ev.dataTransfer.effectAllowed = 'move' } catch {} }
-  const sideDragOver = ev => { try { if (Array.from(ev.dataTransfer?.types || []).includes('application/x-filebox-side')) ev.preventDefault() } catch {} }
-  const sideDrop = id => ev => { ev.preventDefault(); try { moveSideItem(ev.dataTransfer.getData('application/x-filebox-side'), id) } catch {} }
+  const sideDragStart = id => ev => { try { ev.dataTransfer.setData('application/x-hermes-filebox-side', id) } catch {} try { ev.dataTransfer.effectAllowed = 'move' } catch {} }
+  const sideDragOver = ev => { try { if (Array.from(ev.dataTransfer?.types || []).includes('application/x-hermes-filebox-side')) ev.preventDefault() } catch {} }
+  const sideDrop = id => ev => { ev.preventDefault(); try { moveSideItem(ev.dataTransfer.getData('application/x-hermes-filebox-side'), id) } catch {} }
 
   const togglePin = () => {
     if (!cwd) return
@@ -1007,7 +1007,7 @@ function TabPane({ ctx, tabId, initialCwd, sort, setSort, tilePx, setTilePx, sho
     onContextMenu: () => { if (!sel.includes(e.path)) { anchorRef.current = idx; setSel([e.path]) } },
     onDragStart: isTrash ? undefined : (ev => {
       const paths = (sel.includes(e.path) && sel.length) ? sel : [e.path]
-      try { ev.dataTransfer.setData('application/x-filebox-paths', JSON.stringify(paths)) } catch {}
+      try { ev.dataTransfer.setData('application/x-hermes-filebox-paths', JSON.stringify(paths)) } catch {}
       try {
         if (paths.length === 1) {
           const one = entries.find(x => x.path === paths[0])
@@ -1019,7 +1019,7 @@ function TabPane({ ctx, tabId, initialCwd, sort, setSort, tilePx, setTilePx, sho
     }),
     onDragOver: (e.is_dir && !isTrash) ? (ev => { if (hasFbPaths(ev)) { ev.preventDefault(); ev.dataTransfer.dropEffect = 'move'; setDropPath(e.path) } }) : undefined,
     onDragLeave: (e.is_dir && !isTrash) ? (ev => { if (!ev.currentTarget.contains(ev.relatedTarget)) setDropPath(cur => cur === e.path ? null : cur) }) : undefined,
-    onDrop: (e.is_dir && !isTrash) ? (ev => { ev.preventDefault(); setDropPath(null); try { dropMove(JSON.parse(ev.dataTransfer.getData('application/x-filebox-paths') || '[]'), e.path) } catch {} }) : undefined,
+    onDrop: (e.is_dir && !isTrash) ? (ev => { ev.preventDefault(); setDropPath(null); try { dropMove(JSON.parse(ev.dataTransfer.getData('application/x-hermes-filebox-paths') || '[]'), e.path) } catch {} }) : undefined,
     onDoubleClick: isTrash ? undefined : (() => openEntry(e)),
     onKeyDown: ev => { if (ev.key === 'Enter' && !isTrash) openEntry(e) },
   })
@@ -1173,7 +1173,7 @@ function TabPane({ ctx, tabId, initialCwd, sort, setSort, tilePx, setTilePx, sho
         if (isTrash) return
         if (ev.target?.closest && ev.target.closest('[data-dir="true"]')) return
         ev.preventDefault()
-        try { dropMove(JSON.parse(ev.dataTransfer.getData('application/x-filebox-paths') || '[]'), cwd) } catch {}
+        try { dropMove(JSON.parse(ev.dataTransfer.getData('application/x-hermes-filebox-paths') || '[]'), cwd) } catch {}
       }, children: [
         list.isFetching && !list.data && jsx(GlyphSpinner, { ariaLabel: t('explorer') }),
         list.isError && jsx('div', { className: 'hermes-fb-error', role: 'status', children: t('backendDown') }),
@@ -1341,8 +1341,8 @@ export default {
       paneDispose = null
       style.remove()
     })
-    paneRegister = () => ctx.register({ id: 'filebox-pane', area: 'panes', title: 'FileBox', data: { placement: 'right', width: '440px' }, render: () => jsx(Explorer, { ctx }) })
+    paneRegister = () => ctx.register({ id: 'hermes-filebox-pane', area: 'panes', title: 'FileBox', data: { placement: 'right', width: '440px' }, render: () => jsx(Explorer, { ctx }) })
     if (!collapsed.get()) paneDispose = paneRegister()
-    ctx.register({ id: 'filebox-chip', area: STATUSBAR_AREAS.right, order: 14, render: () => jsx(FileChip, { ctx }) })
+    ctx.register({ id: 'hermes-filebox-chip', area: STATUSBAR_AREAS.right, order: 14, render: () => jsx(FileChip, { ctx }) })
   },
 }
