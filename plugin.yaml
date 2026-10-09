@@ -1,5 +1,5 @@
 name: hermes-filebox
-version: 1.13.0
+version: 1.13.1
 description: "Windows-Explorer-style file browser: tabs, multi-select, grid + list views, reorderable sidebar, drag-and-drop, CRUD/zip, recycle bin, video + 3D thumbs, STL/OBJ viewer, right-click menu, OS drag/copy."
 author: "Tala + Zack"
-python_dependencies: ["send2trash>=1.8,<2", "psutil>=5.9", "Pillow>=9", "numpy>=1.24"]
+python_dependencies: ["send2trash>=1.8", "psutil>=5.9", "Pillow>=9", "numpy>=1.24"]
