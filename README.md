@@ -53,11 +53,11 @@ go to the bin, never vanish.
 
 ## Install
 
-1. Copy the `filebox` folder into your Hermes plugins directory
+1. Copy the `hermes-filebox` folder into your Hermes plugins directory
    (`%LOCALAPPDATA%\hermes\plugins\` on Windows, next to `sysmon`, `pals`, …).
-2. Enable it: `hermes plugins enable filebox` (then restart the gateway).
+2. Enable it: `hermes plugins enable hermes-filebox` (then restart the gateway).
 3. In the Hermes desktop app: Settings → Plugins → turn on **Filebox**, then
-   reload (⌘K → Reload). The FileBox pane starts collapsed — open it from
+   reload (Ctrl+K → Reload). The FileBox pane starts collapsed — open it from
    the **FileBox** chip bottom-right. Drag it to the right side and close the
    built-in files pane if you want it as your sidebar.
 
